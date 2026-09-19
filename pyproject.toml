@@ -1,0 +1,39 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "gustiakmal-redteam-next"
+version = "2.1.0"
+description = "Evidence-first offensive red-team and bug-bounty verification framework"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE" }
+authors = [{ name = "Gustiakmal" }]
+dependencies = [
+  "fastapi==0.135.3",
+  "uvicorn[standard]==0.38.0",
+  "pydantic==2.13.4",
+  "Brotli==1.2.0",
+  "playwright==1.55.0",
+]
+
+[project.optional-dependencies]
+dev = [
+  "pytest==9.1.1",
+  "httpx==0.28.1",
+]
+
+[project.scripts]
+redteam-next = "redteam_agent.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["redteam_agent*"]
+
+[tool.setuptools.package-data]
+redteam_agent = ["web/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["redteam_agent/tests"]
+pythonpath = ["."]
+addopts = "-ra"

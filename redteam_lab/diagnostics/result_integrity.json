@@ -1,0 +1,38 @@
+{
+  "empty_findings_unobserved_claim": {
+    "exit_code": 1,
+    "verdict": "⚠  VERDICT: INVESTIGATE — see findings/quarantine above.",
+    "unbacked_claim_warning": true,
+    "summary_written": true
+  },
+  "verified_with_empty_findings": {
+    "exit_code": 1,
+    "verdict": "⚠  VERDICT: INVESTIGATE — see findings/quarantine above.",
+    "unbacked_claim_warning": false,
+    "summary_written": true
+  },
+  "investigate_exit_status": {
+    "exit_code": 1,
+    "verdict": "⚠  VERDICT: INVESTIGATE — see findings/quarantine above.",
+    "unbacked_claim_warning": false,
+    "summary_written": true
+  },
+  "method_query_mismatch": {
+    "exit_code": 1,
+    "verdict": "⚠  VERDICT: INVESTIGATE — see findings/quarantine above.",
+    "unbacked_claim_warning": true,
+    "summary_written": true
+  },
+  "nan_confidence": {
+    "submission_ready": 0,
+    "quarantined": 1
+  },
+  "whitespace_review": {
+    "submission_ready": 0,
+    "quarantined": 1
+  },
+  "malformed_confidence": {
+    "submission_ready": 0,
+    "quarantined": 1
+  }
+}

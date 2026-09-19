@@ -1,0 +1,32 @@
+{
+  "engagement_id": "BB-2026-001",
+  "authorization_reference": "SIGNED-ROE-2026-001",
+  "allowed_targets": [
+    "",
+    ""
+  ],
+  "expires_at": "2026-12-31T23:59:59+08:00",
+  "prohibited_techniques": [
+    "denial-of-service",
+    "social-engineering",
+    "destructive-write"
+  ],
+  "allowed_techniques": [
+    "idor",
+    "bola",
+    "sqli",
+    "xss",
+    "ssrf",
+    "auth-bypass",
+    "authorization",
+    "ssti",
+    "open-redirect",
+    "graphql",
+    "cloud-baas"
+  ],
+  "objective": "Prove unauthorized confidentiality or integrity impact with non-destructive evidence.",
+  "emergency_contact": "See the signed Rules of Engagement; do not store personal contact data here.",
+  "notes": [
+    "Use researcher-owned accounts and stop immediately on service instability."
+  ]
+}

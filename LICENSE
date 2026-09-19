@@ -1,0 +1,33 @@
+GUSTIAKMAL RESEARCH TOOLS LICENSE 1.0
+
+Copyright (c) 2026 Gustiakmal. All rights reserved.
+
+1. Permission
+
+The copyright owner grants a limited, non-transferable permission to run,
+inspect, and modify this software for authorized security testing, controlled
+laboratory validation, and private security research.
+
+2. Attribution
+
+Copies and substantial derivative works must retain the copyright notice,
+the product name "Gustiakmal RedTeam Next", and a reference to this license.
+
+3. Restrictions
+
+This permission does not grant permission to test systems without documented
+authorization, to use credentials belonging to another person, or to
+redistribute this software or a substantial derivative without written
+permission from Gustiakmal.
+
+4. No warranty
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED. THE COPYRIGHT OWNER IS NOT LIABLE FOR CLAIMS, DAMAGES, OR OTHER
+LIABILITY ARISING FROM USE OF THE SOFTWARE.
+
+5. Termination
+
+This permission terminates automatically if the conditions above are
+breached. Upon termination, use and distribution must stop and copies under
+the recipient's control must be removed.

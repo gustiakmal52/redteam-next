@@ -1,0 +1,846 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gustiakmal RedTeam Next</title>
+  <!-- Tactical visual system loaded last to ensure proper cascade -->
+  <link rel="stylesheet" href="/static/style.css?v=2.1">
+  <link rel="stylesheet" href="/static/tactical.css?v=2.1">
+</head>
+<body>
+  <div id="web-auth-overlay" class="web-auth-overlay" hidden>
+    <form id="web-auth-form" class="web-auth-card" autocomplete="off">
+      <div class="brand-name">Dashboard authentication</div>
+      <p class="text-dim">This dashboard is bound beyond loopback. Enter the token printed by the launcher.</p>
+      <label for="web-auth-token">Dashboard token</label>
+      <input id="web-auth-token" type="password" required autocomplete="current-password">
+      <button class="btn-primary" type="submit">Unlock dashboard</button>
+      <p id="web-auth-error" class="web-auth-error" role="alert"></p>
+    </form>
+  </div>
+
+  <!-- Top Bar -->
+  <header class="topbar">
+    <div class="brand">
+      <span class="brand-mark">RT</span>
+      <div>
+        <div class="brand-name">Gustiakmal RedTeam Next</div>
+        <div class="brand-sub">Offensive web security research console</div>
+      </div>
+    </div>
+
+    <div class="topbar-stats">
+      <div class="stat">
+        <span class="stat-num" id="stat-subdomains">0</span>
+        <span class="stat-lbl">Subdomains</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num" id="stat-hosts">0</span>
+        <span class="stat-lbl">Live hosts</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num" id="stat-endpoints">0</span>
+        <span class="stat-lbl">Endpoints</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num" id="stat-secrets">0</span>
+        <span class="stat-lbl">Secrets</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num" id="stat-baas">0</span>
+        <span class="stat-lbl">BaaS</span>
+      </div>
+      <div class="stat">
+        <span class="stat-num" id="stat-vulns">0</span>
+        <span class="stat-lbl">Findings</span>
+      </div>
+      <div class="status" id="global-status">
+        <span class="status-indicator idle" id="global-status-indicator"></span>
+        <span class="status-text" id="global-status-text">IDLE</span>
+      </div>
+      <button id="btn-theme" class="btn-sm" title="Toggle theme">Dark</button>
+    </div>
+  </header>
+
+  <!-- Tabs -->
+  <nav class="tabs">
+    <button class="tab-btn active" data-tab="tab-dashboard">Dashboard</button>
+    <button class="tab-btn" data-tab="tab-terminal">Live Log <span class="tab-badge" id="badge-terminal">0</span></button>
+    <button class="tab-btn" data-tab="tab-surface">Attack Surface <span class="tab-badge" id="badge-surface">0</span></button>
+    <button class="tab-btn" data-tab="tab-js">JS &amp; API <span class="tab-badge" id="badge-js">0</span></button>
+    <button class="tab-btn" data-tab="tab-cloud">BaaS <span class="tab-badge" id="badge-cloud">0</span></button>
+    <button class="tab-btn" data-tab="tab-hidden-assets">Assets <span class="tab-badge" id="badge-hidden-assets">0</span></button>
+    <button class="tab-btn" data-tab="tab-hidden-endpoints">Endpoints <span class="tab-badge" id="badge-hidden-endpoints">0</span></button>
+    <button class="tab-btn" data-tab="tab-hidden-credentials">Credentials <span class="tab-badge" id="badge-hidden-credentials">0</span></button>
+    <button class="tab-btn" data-tab="tab-hidden-auth">Auth Flow <span class="tab-badge" id="badge-hidden-auth">0</span></button>
+    <button class="tab-btn" data-tab="tab-hidden-maps">Source Maps <span class="tab-badge" id="badge-hidden-maps">0</span></button>
+    <button class="tab-btn" data-tab="tab-deep-exploit">Deep Exploit <span class="tab-badge" id="badge-deep-exploit">0</span></button>
+    <button class="tab-btn" data-tab="tab-recon">Recon Depth <span class="tab-badge" id="badge-recon">0</span></button>
+    <button class="tab-btn" data-tab="tab-vulns">Findings <span class="tab-badge" id="badge-vulns">0</span></button>
+    <button class="tab-btn" data-tab="tab-sandbox">Sandbox</button>
+    <button class="tab-btn" data-tab="tab-report">Report</button>
+  </nav>
+
+  <main class="main">
+
+    <!-- Dashboard -->
+    <section id="tab-dashboard" class="tab-pane active">
+      <div class="dashboard-grid">
+        <div class="panel">
+          <div class="panel-header">
+            <h2>New scan</h2>
+            <span class="panel-tag">subfinder · httpx · gau · katana · js · baas · ffuf</span>
+          </div>
+          <div class="panel-body">
+            <div class="form-group">
+              <label for="input-target">Target domain or URL</label>
+              <div class="input-with-action">
+                <input type="text" id="input-target" placeholder="example.com or https://app.example.com" value="">
+                <button id="btn-start-scan" class="btn-primary">Start scan</button>
+              </div>
+            </div>
+
+            <div class="form-group">
+              <label>Preset</label>
+              <div class="presets-grid">
+                <label class="preset-card selected">
+                  <input type="radio" name="scan-preset" value="full" checked>
+                  <div class="preset-content">
+                    <strong>Full</strong>
+                    <span>Subdomain, probe, crawl, JS, BaaS, fuzz, exploit, CISA KEV</span>
+                  </div>
+                </label>
+                <label class="preset-card">
+                  <input type="radio" name="scan-preset" value="smart">
+                  <div class="preset-content">
+                    <strong>Smart</strong>
+                    <span>Recon, tech fingerprint, JS routes, misconfig checks</span>
+                  </div>
+                </label>
+                <label class="preset-card">
+                  <input type="radio" name="scan-preset" value="js_hunter">
+                  <div class="preset-content">
+                    <strong>JS hunter</strong>
+                    <span>Bundles, sourcemaps, API routes, token harvesting</span>
+                  </div>
+                </label>
+                <label class="preset-card">
+                  <input type="radio" name="scan-preset" value="cloud_baas">
+                  <div class="preset-content">
+                    <strong>Cloud BaaS</strong>
+                    <span>Supabase RLS, Firebase open rules</span>
+                  </div>
+                </label>
+                <label class="preset-card">
+                  <input type="radio" name="scan-preset" value="active_exploit">
+                  <div class="preset-content">
+                    <strong>Exploit</strong>
+                    <span>Active verification with PoC</span>
+                  </div>
+                </label>
+                <label class="preset-card">
+                  <input type="radio" name="scan-preset" value="deep_bypass">
+                  <div class="preset-content">
+                    <strong>Deep bypass</strong>
+                    <span>Adaptive WAF, parser, normalization, and auth differential</span>
+                  </div>
+                </label>
+                <label class="preset-card">
+                  <input type="radio" name="scan-preset" value="lab_hardened">
+                  <div class="preset-content">
+                    <strong>Lab hardened</strong>
+                    <span>Own strict local lab: JS, DB, exploit verify, offline</span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            <div class="scan-policy-grid">
+              <div class="form-group">
+                <label for="traffic-preset">Traffic</label>
+                <select id="traffic-preset">
+                  <option value="NORMAL" selected>NORMAL — 5 global / 3 host RPS</option>
+                  <option value="STEALTH">STEALTH — 2 global / 1 host RPS</option>
+                  <option value="FAST">FAST — 10 global / 5 host RPS</option>
+                </select>
+              </div>
+              <div class="form-group">
+                <label for="max-requests">Request budget</label>
+                <input type="number" id="max-requests" min="1" placeholder="500 (default global budget)">
+              </div>
+              <div class="form-group">
+                <label for="bypass-budget">Deep bypass budget (bug bounty optimized)</label>
+                <input type="number" id="bypass-budget" min="0" value="80">
+              </div>
+              <div class="form-group">
+                <label for="max-depth">Deep exploit depth</label>
+                <select id="max-depth">
+                  <option value="0">0 — detection</option>
+                  <option value="1">1 — direct proof</option>
+                  <option value="2">2 — adaptive bypass</option>
+                  <option value="3" selected>3 — exploit chaining (default)</option>
+                </select>
+              </div>
+              <div class="form-group checkbox-group">
+                <label for="offensive-mode">Deep offensive planner</label>
+                <label class="checkbox-label">
+                  <input type="checkbox" id="offensive-mode">
+                  <span>Use discovered request shapes / identities</span>
+                </label>
+              </div>
+              <div class="form-group checkbox-group">
+                <label>Hidden asset discovery</label>
+                <label class="checkbox-label"><input type="checkbox" id="deep-assets-mode" checked><span>Recursive chunks/config</span></label>
+              </div>
+              <div class="form-group checkbox-group">
+                <label>Credential references</label>
+                <label class="checkbox-label"><input type="checkbox" id="secret-discovery-mode" checked><span>Classify + redact</span></label>
+              </div>
+              <div class="form-group checkbox-group">
+                <label>Auth flow graph</label>
+                <label class="checkbox-label"><input type="checkbox" id="auth-flow-mode" checked><span>Static storage/header flow</span></label>
+              </div>
+              <div class="form-group checkbox-group">
+                <label>Source maps</label>
+                <label class="checkbox-label"><input type="checkbox" id="source-maps-mode" checked><span>Bounded reprocessing</span></label>
+              </div>
+              <div class="form-group checkbox-group">
+                <label>Browser runtime observation</label>
+                <label class="checkbox-label"><input type="checkbox" id="browser-verify-mode"><span>Researcher-owned context only</span></label>
+              </div>
+              <div class="form-group">
+                <label for="hunt-objective">Session objective</label>
+                <input type="text" id="hunt-objective" placeholder="Example: prove cross-tenant invoice read via IDOR">
+              </div>
+              <div class="form-group">
+                <label for="vulnerability-classes">Vulnerability classes (max 2)</label>
+                <input type="text" id="vulnerability-classes" placeholder="idor, xss, sqli, ssrf, graphql, ...">
+              </div>
+              <div class="form-group">
+                <label for="engagement-file">Load authorization / engagement JSON</label>
+                <input type="file" id="engagement-file" accept="application/json,.json">
+                <span id="engagement-status" class="text-dim">Required before any target traffic, including recon.</span>
+              </div>
+              <div class="form-group">
+                <label for="request-corpus-file">Load target-specific requests (HAR/JSON)</label>
+                <input type="file" id="request-corpus-file" accept="application/json,.json,.har">
+                <span id="request-corpus-status" class="text-dim">Optional. Request values remain in memory; public output keeps only method, field names, and source evidence.</span>
+              </div>
+              <div class="form-group">
+                <label for="auth-context-file">Load researcher-owned auth context</label>
+                <input type="file" id="auth-context-file" accept="application/json,.json">
+                <span id="auth-context-status" class="text-dim">No context loaded; no ambient browser profile is used.</span>
+              </div>
+              <div class="form-group">
+                <label for="scope-include">Scope include</label>
+                <input type="text" id="scope-include" placeholder="Default: target and *.target">
+              </div>
+              <div class="form-group">
+                <label for="scope-exclude">Scope exclude</label>
+                <input type="text" id="scope-exclude" placeholder="comma-separated">
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel">
+          <div class="panel-header">
+            <h2>Threat intel</h2>
+            <span class="badge-live">CISA KEV</span>
+          </div>
+          <div class="panel-body">
+            <p class="intel-desc">Technology matches are discovery hints only. An affected version must be verified independently.</p>
+            <div id="cisa-intel-list" class="intel-list">
+              <div class="intel-item">
+                <span class="cve-tag">No target data</span>
+                <strong>Run a scan to produce technology matches.</strong>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="panel span-2">
+          <div class="panel-header">
+            <h2>Recent audits</h2>
+            <button id="btn-refresh-scans" class="btn-sm">Refresh</button>
+          </div>
+          <div class="panel-body table-responsive">
+            <table class="table">
+              <thead>
+                <tr>
+                  <th>Task</th>
+                  <th>Target</th>
+                  <th>Preset</th>
+                  <th>Status</th>
+                  <th>Progress</th>
+                  <th>Findings</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody id="recent-scans-tbody">
+                <tr><td colspan="7" class="empty-cell">No scans yet. Enter a target above to start.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <div class="panel span-2">
+          <div class="panel-header">
+            <h2>Traffic &amp; scope</h2>
+            <span class="panel-tag" id="policy-scope-summary">No active scan</span>
+          </div>
+          <div class="panel-body policy-metrics">
+            <span>Preset <strong id="policy-preset">—</strong></span>
+            <span>Global RPS <strong id="policy-global-rps">—</strong></span>
+            <span>Host RPS <strong id="policy-host-rps">—</strong></span>
+            <span>Global concurrency <strong id="policy-concurrency">—</strong></span>
+            <span>Host concurrency <strong id="policy-host-concurrency">—</strong></span>
+            <span>Budget <strong id="policy-budget">—</strong></span>
+            <span>Sent <strong id="policy-sent">0</strong></span>
+            <span>429 / 503 <strong id="policy-pressure">0 / 0</strong></span>
+            <span>Throttle <strong id="policy-throttle">—</strong></span>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Live Log -->
+    <section id="tab-terminal" class="tab-pane">
+      <div class="pipeline-stepper">
+        <div class="step" data-step="1"><span class="step-num">1</span> Subdomains</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="2"><span class="step-num">2</span> HTTP probe</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="3"><span class="step-num">3</span> Crawl</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="4"><span class="step-num">4</span> JS</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="5"><span class="step-num">5</span> BaaS</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="6"><span class="step-num">6</span> Fuzz</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="7"><span class="step-num">7</span> Exploit</div>
+        <div class="step-line"></div>
+        <div class="step" data-step="8"><span class="step-num">8</span> Intel</div>
+      </div>
+
+      <div class="progress-bar-container">
+        <div class="progress-fill" id="pipeline-progress-fill" style="width: 0%;"></div>
+        <span class="progress-text" id="pipeline-progress-text">0% — Ready</span>
+      </div>
+
+      <div class="terminal-window">
+        <div class="terminal-header">
+          <span class="term-title" id="terminal-target-title">Live console stream</span>
+          <div class="term-actions">
+            <button id="btn-clear-term" class="btn-term">Clear</button>
+            <button id="btn-copy-term" class="btn-term">Copy</button>
+          </div>
+        </div>
+        <div class="terminal-body" id="terminal-output">
+          <div class="term-line system">[SYSTEM] Ready. Select a preset and start a scan.</div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Attack Surface -->
+    <section id="tab-surface" class="tab-pane">
+      <div class="filter-bar">
+        <input type="text" id="surface-filter" placeholder="Filter hosts, endpoints, tech...">
+        <span class="item-count" id="surface-count">0 items</span>
+      </div>
+      <div class="surface-grid">
+        <div class="panel">
+          <div class="panel-header"><h3>Live HTTP hosts</h3></div>
+          <div class="panel-body table-responsive">
+            <table class="table">
+              <thead>
+                <tr><th>Host</th><th>Status</th><th>Title</th><th>Tech</th><th></th></tr>
+              </thead>
+              <tbody id="hosts-tbody">
+                <tr><td colspan="5" class="empty-cell">No hosts probed yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>Harvested endpoints</h3></div>
+          <div class="panel-body table-responsive">
+            <table class="table">
+              <thead>
+                <tr><th>Endpoint</th><th></th></tr>
+              </thead>
+              <tbody id="endpoints-tbody">
+                <tr><td colspan="2" class="empty-cell">No endpoints harvested yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- JS & API -->
+    <section id="tab-js" class="tab-pane">
+      <div class="js-stats-bar">
+        <div class="mini-card"><h4 id="js-count-files">0</h4><span>Bundles</span></div>
+        <div class="mini-card"><h4 id="js-count-maps">0</h4><span>Sourcemaps</span></div>
+        <div class="mini-card"><h4 id="js-count-routes">0</h4><span>Routes</span></div>
+        <div class="mini-card"><h4 id="js-count-params">0</h4><span>Hidden params</span></div>
+      </div>
+      <div class="js-grid">
+        <div class="panel">
+          <div class="panel-header"><h3>Bundles &amp; sourcemaps</h3></div>
+          <div class="panel-body table-responsive">
+            <table class="table">
+              <thead>
+                <tr><th>Script</th><th>Size</th><th>Sourcemap</th><th>Routes</th><th>Secrets</th></tr>
+              </thead>
+              <tbody id="js-bundles-tbody">
+                <tr><td colspan="5" class="empty-cell">No JS bundles analyzed yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+        <div class="panel">
+          <div class="panel-header"><h3>API &amp; GraphQL routes</h3></div>
+          <div class="panel-body table-responsive">
+            <table class="table">
+              <thead>
+                <tr><th>Route</th><th>Status</th><th>CORS</th><th></th></tr>
+              </thead>
+              <tbody id="api-routes-tbody">
+                <tr><td colspan="4" class="empty-cell">No internal routes extracted yet.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>Hidden parameters</h3></div>
+        <div class="panel-body">
+          <div id="hidden-params-badges" class="badges-cloud">
+            <span class="badge-pill">No hidden parameters identified yet.</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>API call trace</h3>
+          <span class="panel-tag" id="api-trace-count">0 calls</span></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>Type</th><th>Method</th><th>URL / Route</th><th>Source</th><th></th></tr>
+            </thead>
+            <tbody id="api-trace-tbody">
+              <tr><td colspan="5" class="empty-cell">No API calls traced yet (fetch / axios / XHR / WebSocket).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>JS regex grep</h3>
+          <span class="panel-tag" id="js-grep-count">0 matches</span></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>Pattern</th><th>Match</th><th>Source</th><th>Context</th></tr>
+            </thead>
+            <tbody id="js-grep-tbody">
+              <tr><td colspan="4" class="empty-cell">No grep matches yet (API endpoints, internal URLs, emails, IPs, keys).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Hidden modern assets -->
+    <section id="tab-hidden-assets" class="tab-pane">
+      <div class="js-stats-bar">
+        <div class="mini-card"><h4 id="hidden-assets-count">0</h4><span>Assets</span></div>
+        <div class="mini-card"><h4 id="hidden-js-count">0</h4><span>JS / chunks</span></div>
+        <div class="mini-card"><h4 id="hidden-runtime-count">0</h4><span>Runtime configs</span></div>
+        <div class="mini-card"><h4 id="hidden-framework-count">0</h4><span>Frameworks</span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Modern asset graph</h3><span class="panel-tag">scope-gated · cached · depth bounded</span></div>
+        <div class="panel-body table-responsive">
+          <table class="table"><thead><tr><th>URL</th><th>Type</th><th>Parent</th><th>Depth</th><th>Framework</th><th>Status</th><th>Map</th></tr></thead>
+          <tbody id="hidden-assets-tbody"><tr><td colspan="7" class="empty-cell">No hidden assets analyzed yet.</td></tr></tbody></table>
+        </div>
+      </div>
+      <div class="panel mt-4"><div class="panel-header"><h3>Framework / Next metadata</h3></div><div class="panel-body"><pre id="hidden-frameworks-box" class="code-block">No discovery result loaded.</pre></div></div>
+    </section>
+
+    <!-- Hidden endpoints -->
+    <section id="tab-hidden-endpoints" class="tab-pane">
+      <div class="panel"><div class="panel-header"><h3>Correlated API surfaces</h3><span class="panel-tag">method · auth source · body shape · source trace</span></div>
+        <div class="panel-body table-responsive"><table class="table"><thead><tr><th>Method</th><th>URL</th><th>Type</th><th>Auth</th><th>Headers</th><th>Body fields</th><th>Source</th><th>Confidence</th></tr></thead>
+          <tbody id="hidden-endpoints-tbody"><tr><td colspan="8" class="empty-cell">No hidden endpoints extracted yet.</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- Hidden credentials -->
+    <section id="tab-hidden-credentials" class="tab-pane">
+      <div class="panel"><div class="panel-header"><h3>Credential references (always redacted)</h3><span class="panel-tag">public client key ≠ secret</span></div>
+        <div class="panel-body table-responsive"><table class="table"><thead><tr><th>Type</th><th>Provider</th><th>Masked value</th><th>Status</th><th>Source</th><th>Used by</th><th>Verification</th></tr></thead>
+          <tbody id="hidden-credentials-tbody"><tr><td colspan="7" class="empty-cell">No credential references analyzed yet.</td></tr></tbody></table></div>
+      </div>
+      <div class="panel mt-4"><div class="panel-header"><h3>Evidence policy</h3></div><div class="panel-body"><p id="hidden-redaction-note" class="text-dim">Secret material is masked and fingerprinted. Public provider identifiers such as clientId, userPoolId, tenantId, projectId, domain, and region remain visible so a triager can reproduce the exact deployment correlation.</p></div></div>
+    </section>
+
+    <!-- Auth flow -->
+    <section id="tab-hidden-auth" class="tab-pane">
+      <div class="panel"><div class="panel-header"><h3>Authentication flow graph</h3><span class="panel-tag">field names and storage keys only</span></div>
+        <div class="panel-body"><div id="hidden-auth-flows"><p class="empty-cell">No auth flow analyzed yet.</p></div></div>
+      </div>
+    </section>
+
+    <!-- Source maps -->
+    <section id="tab-hidden-maps" class="tab-pane">
+      <div class="panel"><div class="panel-header"><h3>Source-map evidence</h3><span class="panel-tag">sourcesContent reprocessed; full maps omitted</span></div>
+        <div class="panel-body table-responsive"><table class="table"><thead><tr><th>Map URL</th><th>Parent</th><th>Status</th><th>Sources</th><th>Content processed</th><th>Evidence</th></tr></thead>
+          <tbody id="hidden-maps-tbody"><tr><td colspan="6" class="empty-cell">No source maps parsed yet.</td></tr></tbody></table></div>
+      </div>
+    </section>
+
+    <!-- Offensive target-specific exploit planner -->
+    <section id="tab-deep-exploit" class="tab-pane">
+      <div class="js-stats-bar">
+        <div class="mini-card"><h4 id="deep-exploit-hypotheses">0</h4><span>Hypotheses</span></div>
+        <div class="mini-card"><h4 id="deep-exploit-requests">0</h4><span>Requests</span></div>
+        <div class="mini-card"><h4 id="deep-exploit-primitives">0</h4><span>Verified primitives</span></div>
+        <div class="mini-card"><h4 id="deep-exploit-chains">0</h4><span>Chains</span></div>
+        <div class="mini-card"><h4 id="deep-exploit-intel-enriched">0</h4><span>Intel-enriched</span></div>
+      </div>
+      
+      <div class="panel mb-4">
+        <div class="panel-header">
+          <h3>Offensive Intelligence</h3>
+          <span class="panel-tag">CISA KEV · ExploitDB · HackerOne · Bugcrowd</span>
+        </div>
+        <div class="panel-body">
+          <p class="intel-desc">32+ proven exploit patterns from real bug bounty reports and CVE exploits. Intelligence automatically enriches attack hypotheses based on discovered endpoints and selected vulnerability classes.</p>
+          <div class="policy-metrics" id="intel-status">
+            <span>Total Patterns <strong id="intel-total-patterns">32+</strong></span>
+            <span>Auto-Enrichment <strong id="intel-auto-enrich">Active</strong></span>
+            <span>Sources <strong>4 databases</strong></span>
+            <span>Coverage <strong>IDOR · SQLi · XSS · SSRF · GraphQL · Auth</strong></span>
+          </div>
+        </div>
+      </div>
+      
+      <div class="panel">
+        <div class="panel-header"><h3>Target-specific offensive plan</h3><span class="panel-tag">observed method · body · auth · source trace</span></div>
+        <div class="panel-body table-responsive"><table class="table"><thead><tr><th>Technique</th><th>Method</th><th>Endpoint</th><th>Field</th><th>Source</th><th>Identity</th></tr></thead>
+          <tbody id="deep-exploit-plan-tbody"><tr><td colspan="6" class="empty-cell">No offensive plan executed yet.</td></tr></tbody></table></div>
+      </div>
+      <div class="panel mt-4"><div class="panel-header"><h3>Active attempt ledger</h3><span class="panel-tag">status changes are not proof without relevant behavior</span></div>
+        <div class="panel-body" id="deep-exploit-reports"><p class="empty-cell">No active attempts recorded yet.</p></div>
+      </div>
+      <div class="panel mt-4"><div class="panel-header"><h3>Verified primitives and chains</h3></div>
+        <div class="panel-body"><pre id="deep-exploit-primitives-box" class="code-block">No verified primitives yet.</pre></div>
+      </div>
+    </section>
+
+    <!-- Cloud BaaS -->
+    <section id="tab-cloud" class="tab-pane">
+      <div class="panel mb-4">
+        <div class="panel-header">
+          <h3>Direct BaaS audit</h3>
+          <span class="panel-tag">Supabase RLS · Firebase Realtime DB</span>
+        </div>
+        <div class="panel-body">
+          <div class="direct-baas-form">
+            <select id="direct-baas-platform">
+              <option value="supabase">Supabase (PostgREST RLS)</option>
+              <option value="firebase">Firebase (.json open rules)</option>
+            </select>
+            <input type="text" id="direct-baas-url" placeholder="https://&lt;project&gt;.supabase.co or firebaseio.com">
+            <input type="text" id="direct-baas-key" placeholder="Anon key / Bearer JWT (Supabase)">
+            <button id="btn-direct-baas" class="btn-primary">Audit</button>
+          </div>
+        </div>
+      </div>
+      <div class="panel mb-4">
+        <div class="panel-header"><h3>Discovered Supabase &amp; Firebase deployments</h3></div>
+        <div class="panel-body" id="baas-deployments-container">
+          <p class="empty-cell">No BaaS instances discovered in the current scan yet.</p>
+        </div>
+      </div>
+
+      <div class="panel mb-4">
+        <div class="panel-header"><h3>Discovered Vercel deployments</h3>
+          <span class="panel-tag" id="vercel-count">0 audited</span></div>
+        <div class="panel-body" id="vercel-deployments-container">
+          <p class="empty-cell">No Vercel deployments discovered in the current scan yet.</p>
+        </div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Harvested tokens</h3></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>Type</th><th>Value (masked)</th><th>Source</th><th>Classification</th><th>Severity</th></tr>
+            </thead>
+            <tbody id="secrets-tbody">
+              <tr><td colspan="5" class="empty-cell">No token patterns harvested yet.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>Database connection strings</h3>
+          <span class="panel-tag" id="db-strings-count">0 found</span></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>Scheme</th><th>Value (masked)</th><th>Source</th><th>Creds</th><th>Host</th></tr>
+            </thead>
+            <tbody id="db-strings-tbody">
+              <tr><td colspan="5" class="empty-cell">No database connection strings detected (postgres, mysql, mongo, redis, ...).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>Exposed database ports</h3>
+          <span class="panel-tag" id="db-ports-count">0 open</span></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>Host</th><th>Port</th><th>Service</th><th>State</th><th>Type</th></tr>
+            </thead>
+            <tbody id="db-ports-tbody">
+              <tr><td colspan="5" class="empty-cell">No database ports observed.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>Hidden DB — exposed admin panels</h3>
+          <span class="panel-tag" id="db-admin-count">0 found</span></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>URL</th><th>Panel</th></tr>
+            </thead>
+            <tbody id="db-admin-tbody">
+              <tr><td colspan="2" class="empty-cell">No web DB admin panels found (phpMyAdmin/Adminer/pgAdmin/Mongo Express).</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>Hidden DB — downloadable dump/backup files</h3>
+          <span class="panel-tag" id="db-backup-count">0 found</span></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>URL</th><th>Markers</th></tr>
+            </thead>
+            <tbody id="db-backup-tbody">
+              <tr><td colspan="2" class="empty-cell">No downloadable SQL dump/backup files found.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>Hidden DB — strings in page HTML</h3>
+          <span class="panel-tag" id="db-hidden-count">0 found</span></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>Scheme</th><th>Value (masked)</th><th>Source</th></tr>
+            </thead>
+            <tbody id="db-hidden-tbody">
+              <tr><td colspan="3" class="empty-cell">No hidden DB connection strings detected in page HTML.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Recon Depth -->
+    <section id="tab-recon" class="tab-pane">
+      <div class="js-stats-bar">
+        <div class="mini-card"><h4 id="recon-waf-card">—</h4><span>WAF</span></div>
+        <div class="mini-card"><h4 id="recon-tls-card">—</h4><span>TLS cert</span></div>
+        <div class="mini-card"><h4 id="recon-ports-card">0</h4><span>Open ports</span></div>
+        <div class="mini-card"><h4 id="recon-tech-card">0</h4><span>Tech stack</span></div>
+      </div>
+
+      <div class="panel mb-4">
+        <div class="panel-header"><h3>WAF fingerprint</h3></div>
+        <div class="panel-body" id="waf-result">
+          <p class="empty-cell">No WAF analysis yet. Run a scan with the Full or Smart preset.</p>
+        </div>
+      </div>
+
+      <div class="panel mb-4">
+        <div class="panel-header"><h3>TLS certificate</h3></div>
+        <div class="panel-body" id="tls-result">
+          <p class="empty-cell">No TLS inspection yet.</p>
+        </div>
+      </div>
+
+      <div class="panel">
+        <div class="panel-header"><h3>Open ports (naabu top-200)</h3></div>
+        <div class="panel-body table-responsive">
+          <table class="table">
+            <thead>
+              <tr><th>Host</th><th>Port</th><th>State</th><th>Source</th></tr>
+            </thead>
+            <tbody id="ports-tbody">
+              <tr><td colspan="4" class="empty-cell">No port scan results. Install naabu and rerun.</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </section>
+
+    <!-- Findings -->
+    <section id="tab-vulns" class="tab-pane">
+      <div class="vulns-header-strip">
+        <h2>Findings</h2>
+        <span class="anti-na-badge">Deterministic proof · human final review</span>
+      </div>
+      <div id="verified-vulns-list" class="vulns-list">
+        <div class="empty-vuln-card">
+          <h3>No findings yet</h3>
+          <p>Start a scan to collect candidates. Only deterministic evidence or an explicit human action can assign VERIFIED.</p>
+        </div>
+      </div>
+    </section>
+
+    <!-- Sandbox -->
+    <section id="tab-sandbox" class="tab-pane">
+      <div class="panel">
+        <div class="panel-header">
+          <h3>Request sandbox</h3>
+          <span class="panel-tag">Authorized task · explicit technique · target-derived request</span>
+        </div>
+        <div class="panel-body">
+          <div class="form-row">
+            <div class="form-group flex-2">
+              <label>Target URL</label>
+              <input type="text" id="sandbox-url" placeholder="Authorized http(s) URL">
+            </div>
+            <div class="form-group flex-1">
+              <label>Parameter</label>
+              <input type="text" id="sandbox-param" value="q">
+            </div>
+            <div class="form-group flex-1">
+              <label>Method</label>
+              <select id="sandbox-method">
+                <option value="GET">GET</option>
+                <option value="POST">POST</option>
+                <option value="PUT">PUT</option>
+                <option value="OPTIONS">OPTIONS</option>
+              </select>
+            </div>
+            <div class="form-group flex-1">
+              <label>Exact technique</label>
+              <input type="text" id="sandbox-technique" placeholder="idor, xss, sqli, ssrf">
+            </div>
+          </div>
+          <div class="form-group">
+            <label>Target-derived test value</label>
+            <textarea id="sandbox-payload" rows="2" placeholder="Paste the exact bounded value derived from the captured request and current hypothesis"></textarea>
+          </div>
+          <button id="btn-run-sandbox" class="btn-primary">Send request</button>
+
+          <div class="sandbox-results mt-4" id="sandbox-results-box" style="display: none;">
+            <div class="res-meta-strip">
+              <span id="sandbox-res-status" class="status-badge">NOT RUN</span>
+              <span id="sandbox-res-time" class="time-badge">0.000s</span>
+              <span id="sandbox-res-scope" class="status-badge">SCOPE UNKNOWN</span>
+              <span id="sandbox-res-policy" class="time-badge">NORMAL</span>
+              <span id="sandbox-res-request" class="time-badge">Request #—</span>
+              <span id="sandbox-res-verification" class="status-badge">NOT EXECUTED</span>
+            </div>
+            <div class="raw-panels-grid">
+              <div class="raw-panel">
+                <h4>Request</h4>
+                <pre><code id="sandbox-raw-req"></code></pre>
+              </div>
+              <div class="raw-panel">
+                <h4>Response</h4>
+                <pre><code id="sandbox-raw-resp"></code></pre>
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </section>
+
+    <!-- Report -->
+    <section id="tab-report" class="tab-pane">
+      <div class="report-actions-strip">
+        <h2>Markdown report</h2>
+        <div>
+          <button id="btn-export-json" class="btn-sm">Export JSON</button>
+          <button id="btn-download-bundle" class="btn-sm">Evidence bundle .zip</button>
+          <button id="btn-copy-report" class="btn-sm">Copy</button>
+          <button id="btn-download-report" class="btn-sm">Download .md</button>
+        </div>
+      </div>
+      <div class="panel report-preview-panel">
+        <pre><code id="report-markdown-view"># Red Team Audit Report
+No scan selected or no report generated yet. Run a scan to populate this report.</code></pre>
+      </div>
+
+      <div class="panel mt-4" id="export-analyzer-panel">
+        <div class="panel-header">
+          <h3>Export Exploit Analyzer</h3>
+          <span class="panel-tag">kita analisis hasil export yang sudah di-exploit</span>
+        </div>
+        <div class="panel-body">
+          <p class="text-dim">Export hasil scan-mu (JSON / bundle results.json) lalu upload di sini — kita auto-analisis: prioritas exploit, status VERIFIED/LIKELY/REJECTED, CVSS, FP kill, dan remediation. Atau langsung analisis scan yang sedang aktif tanpa upload.</p>
+          <div class="form-row" style="gap:12px; flex-wrap:wrap; align-items:end;">
+            <div class="form-group" style="min-width:260px; flex:1;">
+              <label for="analyze-upload-file">Upload hasil export (results.json / evidence bundle JSON)</label>
+              <input type="file" id="analyze-upload-file" accept="application/json,.json">
+              <span id="analyze-upload-status" class="text-dim">Belum ada file.</span>
+            </div>
+            <div class="form-group" style="display:flex; gap:8px; flex-wrap:wrap;">
+              <button id="btn-analyze-current" class="btn-primary">Analisis Scan Aktif</button>
+              <button id="btn-analyze-upload" class="btn-sm">Analisis File Upload</button>
+              <button id="btn-analyze-copy" class="btn-sm">Copy Analisis</button>
+              <button id="btn-analyze-download" class="btn-sm">Download Analisis .md</button>
+            </div>
+          </div>
+          <div id="analyze-summary" class="policy-metrics mt-4" style="display:none;"></div>
+          <div id="analyze-recommendations" class="mt-4" style="display:none;"></div>
+          <div class="panel mt-4" style="background:var(--panel-alt, #0f172a0a);">
+            <div class="panel-header"><h4>Prioritized findings</h4><span class="panel-tag" id="analyze-count">0 items</span></div>
+            <div class="panel-body table-responsive">
+              <table class="table">
+                <thead><tr><th>#</th><th>Type</th><th>Endpoint</th><th>Status</th><th>Severity</th><th>CVSS</th><th>Risk</th><th>Ready</th><th>Remediation</th></tr></thead>
+                <tbody id="analyze-tbody"><tr><td colspan="9" class="empty-cell">Belum ada analisis. Klik Analisis Scan Aktif atau upload file.</td></tr></tbody>
+              </table>
+            </div>
+          </div>
+          <div class="panel mt-4">
+            <div class="panel-header"><h4>Analisis Markdown</h4><span class="panel-tag">siap copy / download</span></div>
+            <div class="panel-body"><pre><code id="analyze-markdown-view">Belum ada analisis.</code></pre></div>
+          </div>
+          <details class="mt-4"><summary class="text-dim">Lihat JSON analisis mentah</summary><pre><code id="analyze-json-view" class="code-block">-</code></pre></details>
+        </div>
+      </div>
+    </section>
+
+  </main>
+
+  <div id="toast-container" class="toast-container"></div>
+  <footer class="site-credit">Gustiakmal · RedTeam Next · © 2026</footer>
+  <script src="/static/app.js"></script>
+</body>
+</html>

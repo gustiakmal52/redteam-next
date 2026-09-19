@@ -1,0 +1,23 @@
+{
+  "authorized": true,
+  "identities": {
+    "user_a": {
+      "role": "standard_user",
+      "headers": {
+        "Authorization": "Bearer REPLACE_WITH_RESEARCHER_OWNED_USER_A_TOKEN"
+      },
+      "owner_marker": "REPLACE_WITH_HARMLESS_VALUE_UNIQUE_TO_USER_A_OBJECT"
+    },
+    "user_b": {
+      "role": "standard_user",
+      "headers": {
+        "Authorization": "Bearer REPLACE_WITH_RESEARCHER_OWNED_USER_B_TOKEN"
+      }
+    }
+  },
+  "controlled_callback_url": "https://REPLACE_WITH_YOUR_OAST_HOST.example/callback",
+  "controlled_callback_evidence": {
+    "observed": false,
+    "source": "operator_callback"
+  }
+}

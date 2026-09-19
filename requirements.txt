@@ -1,0 +1,8 @@
+# Gustiakmal RedTeam Next - runtime dependencies
+# Tested in the maintained workspace with Python 3.14.6.
+fastapi==0.135.3
+uvicorn[standard]==0.38.0
+pydantic==2.13.4
+Brotli==1.2.0
+# Browser execution proof for researcher-owned, fresh isolated contexts.
+playwright==1.55.0

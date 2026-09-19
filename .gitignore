@@ -1,0 +1,39 @@
+# Researcher-owned authentication context; never commit bearer/session material.
+auth.json
+*.auth.json
+auth-context.json
+*.auth-context.json
+
+# Engagement records may contain client scope and contact references.
+*engagement*.json
+
+# Local scan artifacts and Python caches.
+redteam_lab/output/
+.freebuff/
+evidence/
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Build artifacts and archives (never commit stale copies or snapshots).
+build/
+dist/
+*.egg-info/
+*.zip
+*.tar.gz
+*.whl
+
+# Credentials/tokens anywhere in the tree.
+token*
+*.token
+secrets*.json
+
+# Separate project (ClientRadar) with its own git repo and venv.
+Project2/
+
+# Public release exclusions — engagement-sensitive material stays local only.
+redteam_agent/AGENT_MEMORY.md
+bin/probe_*.py
+TRANSFORMASI_SELESAI.txt
+LIVE_BOUNTY_MEMO.md
