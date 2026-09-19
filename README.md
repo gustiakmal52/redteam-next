@@ -53,6 +53,7 @@ mencatat SHA-256 tiap artefak. Token/cookie tetap hanya di memori proses dan
 tidak ikut diekspor.
 
 Panduan operasional lengkap: [`OFFENSIVE_WORKFLOW.md`](OFFENSIVE_WORKFLOW.md).
+Daftar fitur lengkap per modul, CLI, dan preset: [`FEATURES.md`](FEATURES.md).
 
 Web Local akan memakai launcher global dan bind ke IP LAN yang terdeteksi,
 kecuali `--listen` diberikan secara eksplisit.

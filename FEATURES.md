@@ -1,0 +1,171 @@
+# RedTeam Next v2.1.0 — Daftar Fitur
+
+Platform riset keamanan web & bug bounty evidence-first: discovery engine,
+exploit verification deterministik, evidence pipeline, dan kontrol keamanan
+pipeline yang tidak bisa dilonggarkan. Setiap klaim temuan wajib tuple
+`PRODUCT-CONTROL -> STATE-CHANGE -> POST-CHANGE-CALL -> EFFECT`.
+
+Dokumen ini diturunkan dari docstring modul dan definisi CLI yang ada di kode.
+Mapping ke OWASP/WSTG/CWE: lihat [CROSSWALK-2026.md](CROSSWALK-2026.md).
+
+## Arsitektur
+
+```
+redteam_agent/
+├── core/       # 36 modul: orchestrator, engine ofensif, pipeline kontrol, verifier
+├── discovery/  # 13 modul: asset, JS, auth-flow, hidden assets, source maps
+├── web/        # Dashboard Web Local (FastAPI + vanilla JS, SSE real-time)
+└── tests/      # 14 file test (pytest)
+redteam_lab/    # Lab lokal dikeraskan untuk uji kejujuran tools (offline)
+bin/redteam_next# Launcher global (portable)
+```
+
+## Fitur Inti — `redteam_agent/core/`
+
+| Modul | Fungsi |
+|---|---|
+| `agent_engine` | Incremental V2.1 pipeline orchestrator: recon, active proof, skeptical triage |
+| `authorization_bypass` | Authorization differential engine (imports compatibility) |
+| `browser_verifier` | Fresh-context browser verification untuk XSS dan CORS proof yang bisa dibaca browser |
+| `bypass_engine` | Adaptive, evidence-first filter & authorization bypass verification |
+| `cloud_baas_hunter` | Supabase/Firebase access-control auditing (RLS bypass, open rules) |
+| `config` | Configuration settings, tool paths, regex patterns, wordlists |
+| `db_hunter` | Database exposure hunter (connection string, DB terbuka) |
+| `deep_exploit_engine` | Target-specific offensive exploit orchestration |
+| `engagement` | Engagement authorization — validasi nyata untuk penggunaan bug bounty ofensif |
+| `evidence_bundle` | Portable, redacted, integrity-checkable evidence bundles (SHA-256 manifest) |
+| `exploit_engine` | Active, non-destructive exploit verification dengan normalized evidence |
+| `export_analyzer` | Analisis hasil scan export dengan exploit proof |
+| `findings` | Normalized finding lifecycle + kontrak review AI dan manusia |
+| `fp_killer` | False-Positive Kill Gate — gerbang anti temuan palsu |
+| `http_verifier` | HTTP verification evidence-first dengan scope, URL policy, traffic controls |
+| `js_analyzer` | Deep Modern JavaScript Bundle & API Tracing Engine |
+| `modern_engine` | Modern Behavioral Engine — injection & misconfiguration detection |
+| `nuclei_matcher` | Nuclei CVE template matcher — DISCOVERED tech match jadi VERIFIED |
+| `offensive_intel_db` | Offensive intelligence database dari bug bounty & CVE exploit nyata |
+| `post_auth_hunter` | Post-Auth Surface Hunter — behavioral, context-specific, adaptive |
+| `recon_depth` | Passive recon depth: WAF fingerprinting, TLS certificate inspection |
+| `recon_pipeline` | Reconnaissance Pipeline Orchestrator |
+| `reference_clients` | Read-only official reference clients untuk hypothesis selection |
+| `reference_intel` | Read-only reference & patch intelligence |
+| `report_builder` | Evidence-bound Bug Bounty reporting tanpa inferred-impact fabrication |
+| `scope_manager` | Central URL normalization, destination policy, Bug Bounty scope checks |
+| `sql_strategies` | Dialect-aware SQLi hypotheses untuk permukaan HTTP/API modern |
+| `ssrf_verifier` | Target-specific SSRF request construction dan OAST proof handling |
+| `task_manager` | Task Manager + Real-time SSE Pub/Sub Broker |
+| `threat_intel` | CISA KEV & CVE/EPSS Live Threat Intelligence Engine |
+| `traffic_controller` | Central request pacing, concurrency, retry/backoff, budget accounting |
+| `vrt_triage` | VRT Triage Engine (Anti-N/A Engine) — menolak pembuangan temuan tanpa bukti |
+
+## Discovery Layer — `redteam_agent/discovery/`
+
+| Modul | Fungsi |
+|---|---|
+| `asset_crawler` | Scope-neutral asset reference extraction untuk hidden discovery queue |
+| `auth_flow` | Static & researcher-owned runtime authentication-flow graphing |
+| `baas_correlation` | Provider-aware BaaS correlation dan bounded linked-project validation |
+| `credentials` | Context-aware static credential discovery dan explicit validation |
+| `endpoint_graph` | Endpoint/credential/asset relationship graph builder |
+| `hidden_assets` | Hidden asset/config/credential discovery orchestration |
+| `js_deep` | Modern JavaScript discovery dengan bounded, dependency-light data flow |
+| `models` | Data contracts untuk hidden asset discovery |
+| `redaction` | Local-only secret handling untuk discovery layer |
+| `request_corpus` | Ubah researcher-captured HTTP traffic jadi target-specific endpoint evidence |
+| `runtime_config` | Runtime & build-time configuration discovery |
+| `source_maps` | Bounded source-map discovery dan source-content hand-off |
+
+## CLI — Seluruh Opsi (`redteam_agent/cli.py`)
+
+```
+Target & mode:
+  target_positional / --url     Target yang diotorisasi eksplisit
+  --web                         Launch Web Command Center Dashboard
+  --port (8899)                 Port dashboard
+  --preset                      Audit preset (lihat daftar di bawah)
+  --json                        Output JSON
+  --offensive                   Mode ofensif (wajib engagement + objective)
+  --aggressive                  Mode agresif
+
+Kontrol scope & engagement:
+  --engagement-file             Engagement JSON (wajib untuk ofensif)
+  --objective                   Objective ofensif
+  --vuln-class                  Kelas kerentanan (repeatable: idor, bola, ...)
+  --scope-include / --scope-exclude   Domain in/out scope (repeatable)
+  --exact-url                   URL in-scope tambahan (repeatable)
+  --allow-private               Izinkan target lokal/private lab eksplisit
+
+Discovery:
+  --deep-assets                 Recursive modern asset/chunk/config discovery
+  --secret-discovery            Context-aware credential reference analysis
+  --auth-flow                   Static authentication/storage/header flow graph
+  --source-maps                 Fetch & reprocess source maps dalam budget
+  --request-corpus              HAR / {requests:[...]} / list request JSON
+
+Auth & identitas:
+  --auth-context                Researcher-owned auth context JSON
+  --auth-login-url/--auth-username/--auth-password (+ field names)
+  --authorization-identities-json   Identitas ganda untuk authorization testing
+  --browser-verify              Hanya konteks observasi runtime milik researcher
+
+Kontrol lalu lintas & budget:
+  --traffic (STEALTH|NORMAL|FAST)
+  --max-requests                Total request budget
+  --bypass-budget               Budget bypass
+  --max-depth (0-3)             Kedalaman exploit
+
+Output:
+  --output-dir                  Folder hasil (results.json, report.md, manifest.json)
+  --show-secrets                Tampilkan secret yang ditemukan
+  --web-auth-token              Token dashboard
+  --listen                      Bind address dashboard (default 127.0.0.1)
+```
+
+## Preset Scan (`core/config.py:237`)
+
+| Preset | Deskripsi |
+|---|---|
+| `full` | Full Auto Recon & Exploit: subdomain enum → HTTP probe → GAU/Katana → JS/hidden asset → BaaS correlation → Param Miner → FFUF → recon depth → exploit verification → adaptive bypass |
+| `smart` | Smart Stealth Recon: subdomain, fingerprinting, JS route, recon depth, misconfig non-intrusif |
+| `js_hunter` | Deep JS bundle, sourcemap unpacking, API route tracing, token/secret harvesting, DB connection string |
+| `cloud_baas` | Supabase RLS bypass auditor, Firebase open rules tester, DB exposure |
+| `active_exploit` | Deep Exploit Verification: injection, parser differential, auth, GraphQL, redirect, SSRF, bypass. Tanpa status-only claim; SSTI tidak pernah di-upgrade ke RCE tanpa execution proof |
+| `deep_bypass` | Baseline → protection detection → target-specific attack planning → adaptive mutation → differential verification → exploit-chain evidence |
+| `lab_hardened` | Offline audit untuk lab lokal sendiri: JS/API route, DB exposure, deterministic exploit verification. Tanpa external recon |
+
+Traffic preset: `STEALTH` (2 rps global), `NORMAL` (5 rps), `FAST` (10 rps) —
+adaptive backoff aktif di semua preset, 429 menurunkan throttle host otomatis.
+
+## Web Dashboard (`redteam_agent/web/`)
+
+- Auth dashboard (token, `--web-auth-token`)
+- Tab scan: preset, target, surface filter
+- Upload auth context, engagement JSON, request corpus (HAR)
+- Scan launcher + SSE real-time stream (`/api/stream/{taskId}`)
+- Terminal log live, progress bar, tabel hasil interaktif
+- Theme toggle (tactical)
+
+## redteam_lab — Lab Lokal Dikeraskan
+
+Target web lokal **tanpa vuln sengaja** untuk menguji kejujuran tools:
+- Header keamanan ketat (CSP `default-src 'none'`, `X-Frame-Options: DENY`, nosniff, COOP/CORP) di setiap response
+- Zero refleksi input, zero CORS
+- Setiap klaim tools dicocokkan dengan access log lab — klaim tanpa request nyata = halu
+- `observe_test.py`: jalankan agent terhadap lab dan buktikan verdict CLEAN (nol temuan palsu)
+- `bench_request_path.py`: benchmark request path
+- `diagnostics/check_result_integrity.py`: cek integritas hasil
+
+## Pipeline Kontrol Keamanan (tidak bisa dilonggarkan)
+
+| Kontrol | Fungsi |
+|---|---|
+| `scope_manager` | Tolak semua tujuan di luar scope engagement |
+| `traffic_controller` | Pacing, concurrency, retry/backoff, budget — anti-ban |
+| `fp_killer` | Gerbang anti false-positive sebelum temuan naik status |
+| `vrt_triage` | Anti-N/A: temuan tidak boleh dibuang tanpa pembuktian |
+| `redaction` | Secret lokal tidak pernah masuk hasil publik |
+| `engagement` | Validasi otorisasi tertulis sebelum traffic ofensif |
+
+## Mapping Standar
+
+Mapping lengkap OWASP Top 10 2025 / API Security 2023 / GenAI LLM Top 10 2026
+ke modul, CWE, dan WSTG: [CROSSWALK-2026.md](CROSSWALK-2026.md).
