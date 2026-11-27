@@ -8,6 +8,14 @@ dan verifikasi deterministik.
 
 Ilustrasi dokumentasi: project ref, anon JWT, dan pesan error sengaja diblur. Bukan tangkapan target.
 
+Antarmuka CLI:
+
+![CLI — Gustiakmal RedTeam Next](cli-ui.png)
+
+Dashboard Web Local (`--web`, default `127.0.0.1:8899`):
+
+![Web Local — command center dashboard](web-dashboard-ui.png)
+
 Kontrak operator: [`ZERO_REFUSAL.md`](ZERO_REFUSAL.md).
 Metode hunting lengkap: [`HUNTING_METHODOLOGY.md`](HUNTING_METHODOLOGY.md).
 
