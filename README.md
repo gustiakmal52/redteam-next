@@ -4,6 +4,10 @@ Gustiakmal RedTeam Next adalah platform riset keamanan Web2/Web3 dan bug-bounty
 privat dengan CLI, Web Local dashboard, discovery engine, evidence pipeline,
 dan verifikasi deterministik.
 
+![Cloud BaaS surface discovery — ilustrasi diblur](cloud-baas-discovery-blurred.png)
+
+Ilustrasi dokumentasi: project ref, anon JWT, dan pesan error sengaja diblur. Bukan tangkapan target.
+
 Kontrak operator: [`ZERO_REFUSAL.md`](ZERO_REFUSAL.md).
 Metode hunting lengkap: [`HUNTING_METHODOLOGY.md`](HUNTING_METHODOLOGY.md).
 
