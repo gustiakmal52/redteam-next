@@ -66,7 +66,7 @@ class ReportBuilder:
 
 ## Summary
 
-The supplied finding records the behavior below. Authorization is not established by this report; consult the engagement's written authorization and scope records.
+The supplied finding records the behavior below. Authorization is not established by this report; check the official bounty program policy or audit Rules of Engagement for scope.
 
 - **Target**: `{finding.get('target') or target_info or self._unknown('target was not recorded')}`
 - **Endpoint**: `{endpoint}`
@@ -368,6 +368,52 @@ Apply a control specific to the confirmed root cause, then rerun the same determ
             md += "\n"
         return md
 
+    def _web3_recon_markdown(self, task_results: Dict[str, Any]) -> str:
+        web3 = task_results.get("web3_recon") or {}
+        if not isinstance(web3, dict) or not web3.get("detected"):
+            return ""
+        stats = web3.get("stats") or {}
+        md = "\n## Web3 Recon Evidence\n\n"
+        md += ("Contract/program records below are inventory evidence. A `VERIFIED_CONTRACT`, "
+               "`VERIFIED_EIP1967_PROXY`, or `VERIFIED_PROGRAM` state requires a successful read-only RPC response; "
+               "static address or ABI matches remain candidates.\n\n")
+        md += (f"- **RPC candidates / verified**: `{stats.get('rpc_candidates', 0)}` / `{stats.get('rpc_verified', 0)}`\n"
+               f"- **EVM contracts / verified**: `{stats.get('contract_candidates', 0)}` / `{stats.get('contracts_verified', 0)}`\n"
+               f"- **EIP-1967 proxies verified**: `{stats.get('proxies_verified', 0)}`\n"
+               f"- **Solana programs verified**: `{stats.get('solana_programs_verified', 0)}`\n"
+               f"- **Read-only RPC requests**: `{stats.get('verification_requests', 0)}`\n\n")
+        if web3.get("rpc_endpoints"):
+            md += "### RPC Identity\n\n| Protocol | Chain | Endpoint | Status | Source |\n|---|---:|---|---|---|\n"
+            for rpc in web3["rpc_endpoints"][:100]:
+                md += (f"| `{rpc.get('protocol') or 'unknown'}` | `{rpc.get('chain_id') or '—'}` | "
+                       f"`{self.redactor.redact_url(str(rpc.get('url') or ''))}` | `{rpc.get('status')}` | "
+                       f"`{', '.join(str(item) for item in rpc.get('sources', []))}` |\n")
+            md += "\n"
+        if web3.get("contracts"):
+            md += "### EVM Contract Inventory\n\n| Address | Chain | Bytecode | Proxy implementation | Status | Sources |\n|---|---:|---:|---|---|---|\n"
+            for contract in web3["contracts"][:200]:
+                proxy = contract.get("proxy") or {}
+                md += (f"| `{contract.get('address')}` | `{contract.get('chain_id') or '—'}` | "
+                       f"`{contract.get('bytecode_size', 0)} bytes` | `{proxy.get('implementation') or '—'}` | "
+                       f"`{proxy.get('status') or contract.get('status')}` | "
+                       f"`{', '.join(str(item) for item in contract.get('sources', []))}` |\n")
+            md += "\n"
+        if web3.get("solana_accounts"):
+            md += "### Solana Account / Program Inventory\n\n"
+            for account in web3["solana_accounts"][:200]:
+                md += (f"- `{account.get('address')}` — `{account.get('status')}`; executable "
+                       f"`{bool(account.get('executable'))}`; owner `{account.get('owner') or 'unknown'}`\n")
+            md += "\n"
+        high_value_abi = [item for item in web3.get("abi_functions", []) if item.get("surface_tags")]
+        if high_value_abi:
+            md += "### Privileged / Value-Moving ABI Surface\n\n"
+            for item in high_value_abi[:200]:
+                md += (f"- `{item.get('signature')}` — tags `"
+                       f"{', '.join(str(tag) for tag in item.get('surface_tags', []))}`; sources `"
+                       f"{', '.join(str(source) for source in item.get('sources', []))}`\n")
+            md += "\n"
+        return md
+
     def generate_full_audit_report(self, task_results: Dict[str, Any]) -> str:
         target = task_results.get("target", "Unknown target")
         stats = task_results.get("stats", {})
@@ -380,18 +426,19 @@ Apply a control specific to the confirmed root cause, then rerun the same determ
 ## Executive Overview
 
 - **Preset**: `{task_results.get('preset', 'unknown')}`
-- **Engagement ID**: `{(task_results.get('engagement') or {}).get('engagement_id') or 'Not supplied; passive/non-offensive session'}`
-- **Authorization reference**: `{(task_results.get('engagement') or {}).get('authorization_reference') or 'Not supplied; active offensive execution was not authorized'}`
+- **Engagement ID**: `{(task_results.get('engagement') or {}).get('engagement_id') or 'Not supplied; exact target scope'}`
+- **Authorization reference**: `{(task_results.get('engagement') or {}).get('authorization_reference') or 'Not supplied'}`
 - **Hunt objective**: `{(task_results.get('hunt_focus') or {}).get('objective') or 'No focused objective recorded'}`
 - **Selected vulnerability classes**: `{', '.join((task_results.get('hunt_focus') or {}).get('vulnerability_classes') or []) or 'No classes selected'}`
 - **Observed/configured domains**: `{stats.get('subdomains', 0)}`
-- **Observed live HTTP services**: `{stats.get('live_hosts', 0)}`
+- **Live HTTP services enumerated by recon**: `{stats.get('live_hosts', 0)}`
 - **Normalized endpoints**: `{stats.get('endpoints', 0)}`
 - **Classified token patterns**: `{stats.get('secrets_found', 0)}`
 - **Candidates requiring review**: `{len(candidates)}`
 - **Findings marked VERIFIED (subject to final triage)**: `{len(verified)}`
 - **Rejected findings**: `{len(rejected)}`
 {self._hidden_discovery_markdown(task_results)}
+{self._web3_recon_markdown(task_results)}
 {self._deep_exploit_markdown(task_results)}
 
 ## Verified Findings
@@ -427,4 +474,6 @@ Apply a control specific to the confirmed root cause, then rerun the same determ
 - **429 / 503 responses**: `{traffic.get('429_count', 0)} / {traffic.get('503_count', 0)}`
 - **Scope**: `{json.dumps(task_results.get('scope', {}), default=str)}`
 """
+        for finding in verified:
+            md += "\n---\n\n" + self.generate_markdown_report(finding, target_info=target) + "\n"
         return md

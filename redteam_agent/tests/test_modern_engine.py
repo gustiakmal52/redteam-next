@@ -180,35 +180,7 @@ def test_cache_poisoning_no_reflection_returns_none():
 
 
 # ---------------------------------------------------------------------------
-# 5. Security headers
-# ---------------------------------------------------------------------------
-def test_security_headers_missing_detected():
-    verifier = _verifier()
-    verifier.send_http_request = lambda *a, **k: _resp(200, "<html>ok</html>", {"Server": "nginx"})
-    engine = ModernEngine(verifier)
-    finding = engine.security_headers_audit("https://example.com/")
-    assert finding is not None
-    assert "Security Headers" in finding["type"]
-    assert len(finding["evidence"][0]["missing_headers"]) >= 5
-
-
-def test_security_headers_complete_returns_none():
-    verifier = _verifier()
-    verifier.send_http_request = lambda *a, **k: _resp(200, "<html>ok</html>", {
-        "Content-Security-Policy": "default-src 'none'",
-        "Strict-Transport-Security": "max-age=31536000",
-        "X-Frame-Options": "DENY",
-        "X-Content-Type-Options": "nosniff",
-        "Cross-Origin-Opener-Policy": "same-origin",
-        "Cross-Origin-Resource-Policy": "same-origin",
-        "Referrer-Policy": "no-referrer",
-    })
-    engine = ModernEngine(verifier)
-    assert engine.security_headers_audit("https://example.com/") is None
-
-
-# ---------------------------------------------------------------------------
-# 6. DOM XSS
+# 5. DOM XSS
 # ---------------------------------------------------------------------------
 def test_dom_xss_sink_source_detected():
     engine = ModernEngine(_verifier())
@@ -228,3 +200,40 @@ def test_dom_xss_sink_only_returns_empty():
     assets = [{"url": "https://example.com/app.js",
                "content": "document.getElementById('x').innerHTML = 'static';"}]
     assert engine.dom_xss_analysis(assets) == []
+
+
+def test_ssti_no_fp_on_verbatim_reflected_query():
+    """E-commerce search reflects the payload verbatim and its catalog noise
+    contains the arithmetic results — that is not template evaluation."""
+    verifier = _verifier()
+    noise = "<html>harga Rp49.000 stok 56</html>"
+
+    def fake(url, *a, **k):
+        body = noise
+        payload = urllib.parse.unquote(str(url).split("=", 1)[-1])
+        if payload not in body:
+            body = noise + payload
+        return _resp(200, body, {})
+
+    verifier.send_http_request = fake
+    engine = ModernEngine(verifier)
+    url = "https://shop.example.com/search?key=susu"
+    assert engine.ssti_arithmetic_multi_engine(url, "key") is None
+
+
+def test_ssti_still_verified_when_payload_replaced():
+    """True SSTI: payload is consumed (absent) and the arithmetic result shows."""
+    verifier = _verifier()
+    results = {"{{7*7}}": "49", "{{7*8}}": "56", "${7*7}": "49", "${7*8}": "56",
+               "#{7*7}": "49", "#{7*8}": "56", "[[7*7]]": "49", "[[7*8]]": "56"}
+
+    def fake(url, *a, **k):
+        payload = urllib.parse.unquote(str(url).split("=", 1)[-1])
+        return _resp(200, f"<html>hasil: {results.get(payload, payload)}</html>", {})
+
+    verifier.send_http_request = fake
+    engine = ModernEngine(verifier)
+    url = "https://shop.example.com/search?key=susu"
+    finding = engine.ssti_arithmetic_multi_engine(url, "key")
+    assert finding is not None
+    assert finding["status"] == "VERIFIED"

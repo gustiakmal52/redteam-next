@@ -14,7 +14,7 @@ from redteam_agent.core.traffic_controller import TrafficController
 from redteam_agent.core.config import DEFAULT_BYPASS_REQUEST_BUDGET, MAX_BYPASS_DEPTH
 from redteam_agent.core.config import DEFAULT_REQUEST_BUDGET
 from redteam_agent.core.engagement import (
-    EngagementError, EngagementProfile, IMPLEMENTED_CLASSES, engagement_required,
+    EngagementError, EngagementProfile, HARD_PROHIBITED, IMPLEMENTED_CLASSES,
 )
 
 
@@ -112,8 +112,14 @@ class ScanTask:
         self.task_id = task_id
         self.target = target.strip()
         self.preset = preset
-        self.scope_in = scope_in or [target.strip()]
-        self.scope_manager = ScopeManager.from_target(target, include=scope_in, exclude=scope_exclude,
+        # Offensive discovery can use the program's declared scope unless a
+        # narrower per-scan include list was supplied.
+        self.offensive = bool(offensive or aggressive or preset in {"active_exploit", "deep_bypass"})
+        if self.offensive and engagement is None and (scope_in or exact_urls):
+            raise EngagementError("additional offensive scope requires --engagement-file")
+        self.scope_in = scope_in or (list(engagement.allowed_targets) if self.offensive and engagement else [target.strip()])
+        default_scope = self.scope_in if self.offensive else scope_in
+        self.scope_manager = ScopeManager.from_target(target, include=default_scope, exclude=scope_exclude,
                                                       exact_urls=exact_urls, allow_private=allow_private)
         # ``None`` from a compatibility caller must not silently disable the
         # global controller budget.  An explicit finite value can still lower
@@ -125,7 +131,9 @@ class ScanTask:
         # ``aggressive`` remains only as a compatibility alias. Both it and the
         # explicit ``offensive`` switch activate the same focused,
         # target-specific planner; there is no second generic spray mode.
-        self.offensive = bool(offensive or aggressive or preset in {"active_exploit", "deep_bypass"})
+        # The flag is retained on the task so pipeline stages can widen
+        # per-sweep coverage caps within the selected target scope.
+        self.aggressive = bool(aggressive)
         self.engagement = engagement
         merged_auth_context = dict(auth_context or {}) if isinstance(auth_context, dict) else {}
         if authorization_identities and not merged_auth_context.get("identities"):
@@ -133,7 +141,8 @@ class ScanTask:
         self.hunt_focus = {
             "objective": str((hunt_focus or {}).get("objective") or "").strip(),
             "vulnerability_classes": list(dict.fromkeys(
-                str(item).strip() for item in (hunt_focus or {}).get("vulnerability_classes", [])
+                str(item).strip().lower().replace("_", "-")
+                for item in (hunt_focus or {}).get("vulnerability_classes", [])
                 if str(item).strip()
             )),
         }
@@ -167,39 +176,27 @@ class ScanTask:
         self.completed_at = None
 
         # ------------------------------------------------------------------ #
-        # Engagement validation (offensive sessions require authorization)
+        # Optional program policy; without one, offensive scope stays on the exact target.
         # ------------------------------------------------------------------ #
         if self.offensive:
-            if self.engagement is None:
-                raise EngagementError("offensive scan requires --engagement-file")
-            self.engagement.assert_active()
-            self.engagement.assert_scope(self.target)
-            self.engagement.assert_techniques(self.hunt_focus.get("vulnerability_classes"))
+            if self.engagement is not None:
+                self.engagement.assert_active()
+                self.engagement.assert_scope(self.target, requested_scope=[*self.scope_in, *(exact_urls or [])])
+                self.engagement.assert_techniques(self.hunt_focus.get("vulnerability_classes"))
             selected_classes = self.hunt_focus.get("vulnerability_classes") or []
             if not selected_classes:
                 raise EngagementError(
                     "offensive scan requires selected vulnerability classes "
                     "(hunt_focus.vulnerability_classes)")
+            prohibited = [item for item in selected_classes if item in HARD_PROHIBITED]
+            if prohibited:
+                raise EngagementError(f"technique {prohibited[0]} is prohibited")
             unsupported = [item for item in selected_classes
                            if item not in IMPLEMENTED_CLASSES]
             if unsupported:
                 raise EngagementError(
                     f"vulnerability class {unsupported[0]} has no target-specific "
                     f"planner (implemented: {', '.join(sorted(IMPLEMENTED_CLASSES))})")
-            if "idor" in selected_classes or "bola" in selected_classes:
-                identities = merged_auth_context.get("identities") or []
-                if len(identities) < 2:
-                    raise EngagementError(
-                        "IDOR/BOLA focus requires two researcher-owned identities "
-                        "(auth_context.identities)")
-                if not any(
-                    isinstance(item, dict) and (item.get("owner_marker") or item.get("markers"))
-                    for item in identities
-                ):
-                    raise EngagementError(
-                        "IDOR/BOLA focus requires an owner-controlled response marker "
-                        "(owner_marker on at least one identity)")
-
         # Real-time event pub/sub queues
         self.subscribers: List[asyncio.Queue] = []
         
@@ -219,6 +216,10 @@ class ScanTask:
                 "secrets_found": 0,
                 "js_grep_matches": 0,
                 "js_api_calls": 0,
+                "web3_rpc_verified": 0,
+                "web3_contracts_verified": 0,
+                "web3_proxies_verified": 0,
+                "web3_programs_verified": 0,
                 "db_connection_strings": 0,
                 "db_exposed_ports": 0,
                 "waf_bypass_attempts": 0,
@@ -247,6 +248,10 @@ class ScanTask:
             "hidden_params": [],
             "js_grep": [],
             "js_api_trace": [],
+            "web3_recon": {
+                "detected": False, "contracts": [], "solana_accounts": [], "rpc_endpoints": [],
+                "chain_ids": [], "abi_functions": [], "integrations": [], "stats": {},
+            },
             "db_hunter": {"connection_strings": [], "exposed_ports": [], "admin_panels": [],
                            "backup_files": [], "hidden_db_strings": [],
                            "total_connection_strings": 0, "total_exposed_ports": 0,
@@ -268,9 +273,9 @@ class ScanTask:
             "vrt_summary": {"approved": 0, "rejected_anti_na": 0, "rejected_no_poc": 0, "total": 0},
             "exploit_mode": self.exploit_mode,
             "offensive_mode": self.offensive,
-            "engagement": engagement.public_summary() if engagement else {
+            "engagement": {**engagement.public_summary(), "authorization_validated": self.offensive} if engagement else {
                 "authorization_validated": False,
-                "reason": "No engagement record supplied; passive/non-offensive session only",
+                "reason": "No engagement record supplied; exact target scope only",
             },
             "hunt_focus": self.hunt_focus,
             "captured_requests": {

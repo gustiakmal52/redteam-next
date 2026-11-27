@@ -103,8 +103,8 @@ Fallback langsung dari source tetap tersedia:
 ./bin/redteam_next
 ```
 
-Launcher akan menjalankan Web Local, mendeteksi IP route LAN, menunggu server
-siap, lalu membuka browser default. Default port adalah `8899`. Setiap scan
+Launcher akan menjalankan Web Local di `127.0.0.1`, menunggu server siap, lalu
+membuka browser default tanpa token dashboard. Default port adalah `8899`. Setiap scan
 memakai satu global request budget finite (default `500`) yang dibagi oleh
 recon, asset discovery, PoC, dan deep exploit.
 
@@ -165,7 +165,6 @@ Tambahkan `--cli` pada launcher portable:
 
 ```bash
 ./bin/redteam_next --cli https://target.example \
-  --engagement-file engagement.json \
   --preset full \
   --deep-assets \
   --secret-discovery \
@@ -178,7 +177,6 @@ Mode deep exploit berbasis evidence:
 ```bash
 ./bin/redteam_next --cli https://target.example \
   --preset deep_bypass \
-  --engagement-file engagement.json \
   --objective "prove unauthorized cross-tenant read" \
   --vuln-class idor \
   --request-corpus captured.har \
@@ -187,16 +185,16 @@ Mode deep exploit berbasis evidence:
   --output-dir evidence/current-session
 ```
 
-Salin `engagement.example.json` menjadi file per engagement lalu isi hanya
-metadata non-sensitif. Jangan simpan tanda tangan, identitas pribadi, token,
-cookie, atau secret client di file tersebut. `authorization_reference` cukup
-menunjuk ke dokumen Rules of Engagement yang disimpan terpisah.
+Engagement JSON dan auth context bersifat opsional. Tanpa engagement JSON,
+mode ofensif dibatasi ke host target yang dimasukkan. Jika memerlukan scope
+program yang lebih luas, salin `engagement.example.json` lalu isi metadata
+non-sensitif dan gunakan `--engagement-file`.
 
 Pemakaian langsung tanpa launcher juga didukung:
 
 ```bash
 PYTHONPATH="$PWD" python -m redteam_agent.cli --url https://target.example \
-  --preset full --engagement-file engagement.json
+  --preset full
 ```
 
 Gunakan `--help` untuk seluruh opsi:
@@ -211,7 +209,6 @@ Hanya gunakan context milik researcher yang memang berwenang:
 
 ```bash
 ./bin/redteam_next --cli https://target.example \
-  --engagement-file engagement.json \
   --auth-context auth.json \
   --browser-verify \
   --deep-assets \

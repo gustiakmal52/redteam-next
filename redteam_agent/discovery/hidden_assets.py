@@ -337,7 +337,6 @@ class HiddenAssetEngine:
                 if asset:
                     self.graph.add_asset_to_credential(asset.url, credential)
                 for endpoint in endpoint_records:
-                    self.credentials.link_endpoint(endpoint)
                     if ((credential.variable_name and (credential.variable_name in str(endpoint.headers) or credential.variable_name in str(endpoint.auth_source)))
                             or (credential.credential_type == "BEARER_REFERENCE" and endpoint.auth_required)):
                         if endpoint.url not in credential.linked_endpoints:

@@ -242,12 +242,17 @@ def test_sourcemap_sources_content_is_reprocessed():
     assert result["js_assets"][0]["sourcemap_routes_found"] == 1
 
 
-def test_private_destination_is_blocked_unless_explicit_lab_mode():
+def test_private_destination_is_blocked_only_when_hardened(monkeypatch):
+    monkeypatch.setenv("REDTEAM_BLOCK_PRIVATE", "1")
     blocked = ScopeManager(["127.0.0.1"], resolve_dns=False).check_url("http://127.0.0.1:8000", active=True)
     allowed = ScopeManager(["127.0.0.1"], allow_private=True, resolve_dns=False).check_url(
         "http://127.0.0.1:8000", active=True)
     assert blocked["allowed"] is False
     assert allowed["allowed"] is True
+    monkeypatch.delenv("REDTEAM_BLOCK_PRIVATE")
+    artex_default = ScopeManager(["127.0.0.1"], resolve_dns=False).check_url(
+        "http://127.0.0.1:8000", active=True)
+    assert artex_default["allowed"] is True
 
 
 def test_human_review_is_explicit_and_auditable():

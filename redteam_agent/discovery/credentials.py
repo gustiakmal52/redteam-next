@@ -6,7 +6,7 @@ import inspect
 import re
 from typing import Any, Dict, Iterable, List, Optional
 
-from redteam_agent.discovery.js_deep import JSDeepAnalyzer, _line_number, _read_quoted
+from redteam_agent.discovery.js_deep import JSDeepAnalyzer, _line_number_lookup, _read_quoted
 from redteam_agent.discovery.models import CredentialRecord
 from redteam_agent.discovery.redaction import SecretRedactor
 
@@ -84,6 +84,7 @@ class CredentialDiscoveryEngine:
     def discover(self, text: str, *, source_url: str = "", source_file: str = "unknown",
                  source_map: Optional[str] = None) -> List[CredentialRecord]:
         text = text or ""
+        line_at = _line_number_lookup(text)
         values: Dict[str, str] = {}
         # Resolve only literal/constant assignments.  No eval and no function execution.
         helper = JSDeepAnalyzer(redactor=self.redactor)
@@ -94,7 +95,7 @@ class CredentialDiscoveryEngine:
             expression = match.group("expr").strip()
             value = helper._static_value(expression, values)
             if value:
-                assignment_by_value[value] = (match.group("name"), _line_number(text, match.start()))
+                assignment_by_value[value] = (match.group("name"), line_at(match.start()))
 
         for match in re.finditer(r"(?P<quote>['\"`])(?P<value>(?:\\.|(?!\1).)*?)(?P=quote)", text, re.DOTALL):
             raw = helper._decode_static(match.group("value"))
@@ -119,7 +120,7 @@ class CredentialDiscoveryEngine:
                 continue
             record = self._record_from_raw(
                 raw, text=text, source_url=source_url, source_file=source_file,
-                source_line=assignment_line or _line_number(text, match.start()),
+                source_line=assignment_line or line_at(match.start()),
                 variable_name=variable_name, source_map=source_map, context=context,
             )
             if record:
@@ -130,7 +131,7 @@ class CredentialDiscoveryEngine:
         for match in re.finditer(r"\bBearer\s+([A-Za-z0-9._~+/=-]{16,})", text, re.IGNORECASE):
             raw = f"Bearer {match.group(1)}"
             record = self._record_from_raw(raw, text=text, source_url=source_url, source_file=source_file,
-                                           source_line=_line_number(text, match.start()), source_map=source_map,
+                                           source_line=line_at(match.start()), source_map=source_map,
                                            context=self._context(text, match.start(), match.end()))
             if record:
                 local.append(self._merge(record))
@@ -144,13 +145,13 @@ class CredentialDiscoveryEngine:
             context = self._context(text, match.start(), match.end())
             record = self._record_from_raw(
                 raw, text=text, source_url=source_url, source_file=source_file,
-                source_line=_line_number(text, match.start()), variable_name=match.group("name"),
+                source_line=line_at(match.start()), variable_name=match.group("name"),
                 source_map=source_map, context=context,
             )
             if record:
                 local.append(self._merge(record))
 
-        self._attach_usages(text, source_file)
+        self._attach_usages(text, source_file, line_at)
         return list(dict((record.sha256, record) for record in local).values())
 
     # Alias used by integrations that call all analyzers with scan().
@@ -177,18 +178,18 @@ class CredentialDiscoveryEngine:
             output.append(self._merge(record))
         return output
 
-    def _attach_usages(self, text: str, source_file: str) -> None:
+    def _attach_usages(self, text: str, source_file: str, line_at: Any) -> None:
         for match in self.HEADER_USE_RE.finditer(text or ""):
             header, expression = match.group("header"), match.group("expr").strip().rstrip("}")
             variable = expression.strip("`'\" ").split("${")[-1].rstrip("}")
             for record in self.records.values():
                 if record.variable_name and (record.variable_name == expression or record.variable_name in expression or record.variable_name == variable):
                     usage = {"type": "header", "header": header, "reference": variable or self.redactor.redact_text(expression),
-                             "source_file": source_file, "source_line": _line_number(text, match.start())}
+                             "source_file": source_file, "source_line": line_at(match.start())}
                     if usage not in record.usage:
                         record.usage.append(usage)
                     record.evidence.append({"usage": {"header": header, "reference": variable or "literal"},
-                                            "source_file": source_file, "source_line": _line_number(text, match.start())})
+                                            "source_file": source_file, "source_line": line_at(match.start())})
 
     def link_endpoint(self, endpoint: Any) -> None:
         endpoint_url = getattr(endpoint, "url", None) or (endpoint.get("url") if isinstance(endpoint, dict) else None)

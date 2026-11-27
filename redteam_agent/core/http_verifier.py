@@ -5,6 +5,7 @@ from __future__ import annotations
 import html
 import gzip
 import http.client
+from functools import lru_cache
 import json
 import os
 import re
@@ -35,6 +36,31 @@ from redteam_agent.core.traffic_controller import RequestBudgetExceeded, Traffic
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return None
+
+
+_TEXT_COMPARE_LIMIT = 8192
+_UUID_RE = re.compile(r"\b[0-9a-f]{8}-[0-9a-f-]{27,}\b", re.I)
+_DYNAMIC_NUMBER_RE = re.compile(r"\b\d{4,}\b")
+_STATIC_PATH_RE = re.compile(
+    r"(?:/_next/static/|/assets/|\.(?:js|css|map|png|jpe?g|gif|svg|woff2?|ttf)(?:\?|$))", re.I)
+
+
+@lru_cache(maxsize=256)
+def _numeric_token_pattern(expected: str) -> "re.Pattern[str]":
+    return re.compile(rf"(?<![0-9]){re.escape(expected)}(?![0-9])")
+
+
+def _eval_context_similarity(responses: Any, probes: Any) -> float:
+    """Compare truncated SSTI response bodies after masking evaluated tokens."""
+    bodies = []
+    for (_, expected), response in zip(probes, responses):
+        text = str(response.get("body", "") or "")[:_TEXT_COMPARE_LIMIT]
+        bodies.append(_numeric_token_pattern(str(expected)).sub("<EVAL_TOKEN>", text, count=1))
+    if len(bodies) < 2:
+        return 0.0
+    if bodies[0] == bodies[1]:
+        return 1.0
+    return SequenceMatcher(None, bodies[0], bodies[1]).ratio()
 
 
 def _close_quietly(connection: Any) -> None:
@@ -302,7 +328,8 @@ _SENSITIVE_HEADERS = {
 class HTTPVerifier:
     def __init__(self, timeout: float = 10.0, traffic_controller: Optional[TrafficController] = None,
                  scope_manager: Optional[ScopeManager] = None, module: str = "verifier",
-                 verify_tls: bool = True):
+                 verify_tls: bool = True, pool: Optional[_KeepAlivePool] = None,
+                 ssl_context: Optional[ssl.SSLContext] = None):
         self.timeout = timeout
         self.traffic = traffic_controller or TrafficController()
         self.scope = scope_manager
@@ -318,11 +345,24 @@ class HTTPVerifier:
                 "X-Bugcrowd-Ninja": bugcrowd_ninja,
             }.items() if value
         }
+        # Program-specific researcher identification headers (e.g. Bitso's
+        # "X-Bug-Bounty: Bugcrowd-<user>"). Supplied as a JSON object via env;
+        # merged here so program headers ride every engine request uniformly.
+        extra_headers_raw = os.environ.get("REDTEAM_EXTRA_HEADERS", "").strip()
+        if extra_headers_raw:
+            extra_headers = json.loads(extra_headers_raw)
+            if not isinstance(extra_headers, dict):
+                raise ValueError("REDTEAM_EXTRA_HEADERS must be a JSON object")
+            for header_key, header_value in extra_headers.items():
+                if "\r" in str(header_value) or "\n" in str(header_value):
+                    raise ValueError("request header environment values must not contain newlines")
+                self.required_headers[str(header_key)] = str(header_value)
         # TLS verification is part of evidence integrity.  The insecure mode
         # remains an explicit opt-in for a researcher-controlled lab with a
         # self-signed certificate; it is never the default.
-        self.ssl_context = ssl.create_default_context() if self.verify_tls else ssl._create_unverified_context()
-        self._pool = _KeepAlivePool()
+        self.ssl_context = ssl_context or (ssl.create_default_context() if self.verify_tls
+                                           else ssl._create_unverified_context())
+        self._pool = pool or _KeepAlivePool()
         self._opener = urllib.request.build_opener(
             _NoRedirect(),
             _PooledHTTPSHandler(self._pool, context=self.ssl_context),
@@ -344,6 +384,21 @@ class HTTPVerifier:
     def close(self) -> None:
         """Release every idle keep-alive socket held by this verifier."""
         self._pool.close()
+
+    def _sleep_before_retry(self, attempt: int, headers: Any) -> None:
+        """Sleep once per retry, honoring Retry-After when the policy allows it."""
+        delay = self.traffic.retry_delay(attempt)
+        if self.traffic.config.get("respect_retry_after", True):
+            retry_after = next((v for k, v in (headers or {}).items()
+                                if str(k).lower() == "retry-after"), None)
+            if retry_after is not None:
+                try:
+                    parser = getattr(self.traffic, "_retry_after_seconds", None)
+                    parsed = float(parser(retry_after)) if parser else float(retry_after)
+                except (TypeError, ValueError):
+                    parsed = 0.0
+                delay = max(delay, min(30.0, max(0.0, parsed)))
+        time.sleep(delay)
 
     @staticmethod
     def _error_result(url: str, method: str, headers: dict, body: Optional[str], reason: str,
@@ -473,7 +528,7 @@ class HTTPVerifier:
                 self.traffic.observe_response(request_url, 0, {}, elapsed, str(exc))
                 if retry_attempt < retry_limit:
                     retry_attempt += 1
-                    time.sleep(self.traffic.retry_delay(retry_attempt))
+                    self._sleep_before_retry(retry_attempt, {})
                     continue
                 return {
                     **self._error_result(request_url, method, headers, body, str(exc), "transport"),
@@ -482,7 +537,7 @@ class HTTPVerifier:
 
             if status_code in {429, 503} and retry_attempt < retry_limit:
                 retry_attempt += 1
-                time.sleep(self.traffic.retry_delay(retry_attempt))
+                self._sleep_before_retry(retry_attempt, resp_headers)
                 continue
             location = next((v for k, v in resp_headers.items() if k.lower() == "location"), None)
             if status_code in {301, 302, 303, 307, 308} and location and follow_redirects:
@@ -501,7 +556,6 @@ class HTTPVerifier:
                         "scope": decision, "redirects": redirects, "request_number": slot["request_number"],
                     }
                 current_url = next_url
-                retry_attempt = 0
                 if status_code == 303:
                     method, body = "GET", None
                 continue
@@ -593,7 +647,7 @@ class HTTPVerifier:
 
     @staticmethod
     def exact_numeric_token(body: str, expected: str) -> bool:
-        return bool(re.search(rf"(?<![0-9]){re.escape(expected)}(?![0-9])", body or ""))
+        return bool(_numeric_token_pattern(str(expected)).search(body or ""))
 
     def verify_ssti(self, target_url: str, param_name: str) -> Dict[str, Any]:
         probes = [("{{7*77}}", "539"), ("{{8*83}}", "664")]
@@ -607,12 +661,8 @@ class HTTPVerifier:
                            "payload_not_reflected": payload not in response.get("body", ""),
                            "absent_from_baseline": not self.exact_numeric_token(baseline_body, expected),
                            "request_success": response.get("success", False)})
-        static_path = bool(re.search(r"(?:/_next/static/|/assets/|\.(?:js|css|map|png|jpe?g|gif|svg|woff2?|ttf)(?:\?|$))", target_url, re.I))
-        normalized_bodies = []
-        for (_, expected), response in zip(probes, responses):
-            normalized_bodies.append(re.sub(rf"(?<![0-9]){re.escape(expected)}(?![0-9])", "<EVAL_TOKEN>",
-                                             response.get("body", ""), count=1))
-        context_similarity = SequenceMatcher(None, normalized_bodies[0], normalized_bodies[1]).ratio()
+        static_path = bool(_STATIC_PATH_RE.search(target_url))
+        context_similarity = _eval_context_similarity(responses, probes)
         equivalent_context = context_similarity >= .8
         deterministic = (all(c["exact_token"] and c["payload_not_reflected"] and c["absent_from_baseline"]
                              and c["request_success"] for c in checks) and equivalent_context)
@@ -764,13 +814,24 @@ class HTTPVerifier:
 
     @staticmethod
     def _sql_body_similarity(first: Dict[str, Any], second: Dict[str, Any]) -> float:
-        """Compare response bodies while ignoring common dynamic identifiers."""
-        def normalise(value: Any) -> str:
-            text = str((value or {}).get("body", "") if isinstance(value, dict) else value or "")
-            text = re.sub(r"\b[0-9a-f]{8}-[0-9a-f-]{27,}\b", "<UUID>", text, flags=re.I)
-            text = re.sub(r"\b\d{4,}\b", "<NUMBER>", text)
-            return text
-        return SequenceMatcher(None, normalise(first), normalise(second)).ratio()
+        """Compare truncated response bodies while ignoring dynamic identifiers."""
+        def raw(value: Any) -> str:
+            return str((value or {}).get("body", "") if isinstance(value, dict) else value or "")
+
+        first_raw = raw(first)
+        second_raw = raw(second)
+        if first_raw == second_raw:
+            return 1.0
+
+        def normalise(text: str) -> str:
+            text = text[:_TEXT_COMPARE_LIMIT]
+            return _DYNAMIC_NUMBER_RE.sub("<NUMBER>", _UUID_RE.sub("<UUID>", text))
+
+        first_text = normalise(first_raw)
+        second_text = normalise(second_raw)
+        if first_text == second_text:
+            return 1.0
+        return SequenceMatcher(None, first_text, second_text).ratio()
 
     @staticmethod
     def _sql_response_ok(response: Dict[str, Any]) -> bool:
@@ -964,11 +1025,7 @@ class HTTPVerifier:
                            "payload_not_reflected": payload not in response.get("body", ""),
                            "absent_from_baseline": not self.exact_numeric_token(baseline_body, expected),
                            "request_success": response.get("success", False)})
-        normalized_bodies = []
-        for (_, expected), response in zip(probes, responses):
-            normalized_bodies.append(re.sub(rf"(?<![0-9]){re.escape(expected)}(?![0-9])", "<EVAL_TOKEN>",
-                                             response.get("body", ""), count=1))
-        context_similarity = SequenceMatcher(None, normalized_bodies[0], normalized_bodies[1]).ratio()
+        context_similarity = _eval_context_similarity(responses, probes)
         equivalent_context = context_similarity >= .8
         deterministic = (all(c["exact_token"] and c["payload_not_reflected"] and c["absent_from_baseline"]
                              and c["request_success"] for c in checks) and equivalent_context)

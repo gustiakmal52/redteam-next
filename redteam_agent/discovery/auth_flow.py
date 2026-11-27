@@ -7,7 +7,7 @@ import re
 import urllib.parse
 from typing import Any, Dict, Iterable, List, Optional
 
-from redteam_agent.discovery.js_deep import LightDataFlowAnalyzer, _line_number
+from redteam_agent.discovery.js_deep import LightDataFlowAnalyzer, _line_number_lookup
 from redteam_agent.discovery.models import AuthFlow, AuthFlowNode, EndpointRecord
 from redteam_agent.discovery.redaction import SecretRedactor
 
@@ -75,6 +75,7 @@ class AuthFlowAnalyzer:
                 data_flow: Optional[Dict[str, Any]] = None,
                 source_map: Optional[str] = None) -> AuthFlow:
         text = text or ""
+        line_at = _line_number_lookup(text)
         flow_id = "auth:" + hashlib.sha256(f"{source_file}|{source_url}".encode()).hexdigest()[:16]
         flow = AuthFlow(flow_id=flow_id, confidence=0.0, evidence=[], runtime_observed=False)
         self._add_endpoint_nodes(flow, endpoints or [], source_file)
@@ -102,14 +103,14 @@ class AuthFlowAnalyzer:
             if field not in field_nodes:
                 continue
             token_node = self._node(flow, "TokenVariable", variable, source_file=source_file,
-                                    source_line=_line_number(text, match.start()))
+                                    source_line=line_at(match.start()))
             self._edge(flow, field_nodes[field], token_node, "assigned_to")
 
         storage_nodes: Dict[str, AuthFlowNode] = {}
         for match in self.STORAGE_RE.finditer(text):
             store, operation, key = match.group(1), match.group(2).lower(), match.group(4)
             storage_node = self._node(flow, "Storage", f"{store}.{key}", source_file=source_file,
-                                      source_line=_line_number(text, match.start()),
+                                      source_line=line_at(match.start()),
                                       metadata={"storage": store, "key": key, "operation": operation})
             storage_nodes[f"{store}.{key}"] = storage_node
             if operation == "setitem":
@@ -123,27 +124,27 @@ class AuthFlowAnalyzer:
                         self._edge(flow, source_node, storage_node, "stored_as")
                     else:
                         token_source = self._node(flow, "TokenVariable", value, source_file=source_file,
-                                                  source_line=_line_number(text, match.start()))
+                                                  source_line=line_at(match.start()))
                         self._edge(flow, token_source, storage_node, "stored_as")
 
         for match in self.COOKIE_RE.finditer(text):
             cookie = self._node(flow, "Storage", "cookie", source_file=source_file,
-                                source_line=_line_number(text, match.start()), metadata={"storage": "cookie", "values_retained": False})
+                                source_line=line_at(match.start()), metadata={"storage": "cookie", "values_retained": False})
             storage_nodes["cookie"] = cookie
         for match in self.INDEXEDDB_RE.finditer(text):
             self._node(flow, "Storage", "IndexedDB", source_file=source_file,
-                       source_line=_line_number(text, match.start()),
+                       source_line=line_at(match.start()),
                        metadata={"storage": "IndexedDB", "values_retained": False})
         for match in self.STATE_STORE_RE.finditer(text):
             label = match.group(0)
             self._node(flow, "Storage", label, source_file=source_file,
-                       source_line=_line_number(text, match.start()), metadata={"storage": "application_state", "values_retained": False})
+                       source_line=line_at(match.start()), metadata={"storage": "application_state", "values_retained": False})
 
         header_nodes: List[tuple[AuthFlowNode, str]] = []
         for match in self.BEARER_RE.finditer(text):
             reference = match.group(1) or match.group(2) or "runtime_token"
             header = self._node(flow, "AuthorizationHeader", "Authorization: Bearer", source_file=source_file,
-                                source_line=_line_number(text, match.start()),
+                                source_line=line_at(match.start()),
                                 metadata={"reference": self.redactor.redact_text(reference), "value_retained": False})
             header_nodes.append((header, "authorization"))
             storage_ref = re.search(r"(?:localStorage|sessionStorage)\.getItem\(\s*['\"]([^'\"]+)", reference, re.IGNORECASE)

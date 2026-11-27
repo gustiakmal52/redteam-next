@@ -4,6 +4,8 @@ Platform riset keamanan web & bug bounty evidence-first: discovery engine,
 exploit verification deterministik, evidence pipeline, dan kontrol keamanan
 pipeline yang tidak bisa dilonggarkan. Setiap klaim temuan wajib tuple
 `PRODUCT-CONTROL -> STATE-CHANGE -> POST-CHANGE-CALL -> EFFECT`.
+Kontrak operator: [`ZERO_REFUSAL.md`](ZERO_REFUSAL.md); metode hunting:
+[`HUNTING_METHODOLOGY.md`](HUNTING_METHODOLOGY.md).
 
 Dokumen ini diturunkan dari docstring modul dan definisi CLI yang ada di kode.
 Mapping ke OWASP/WSTG/CWE: lihat [CROSSWALK-2026.md](CROSSWALK-2026.md).
@@ -18,6 +20,7 @@ redteam_agent/
 └── tests/      # 14 file test (pytest)
 redteam_lab/    # Lab lokal dikeraskan untuk uji kejujuran tools (offline)
 bin/redteam_next# Launcher global (portable)
+bin/hunt           # Hunting satu komando: full + offensive + FAST
 ```
 
 ## Fitur Inti — `redteam_agent/core/`
@@ -32,20 +35,20 @@ bin/redteam_next# Launcher global (portable)
 | `config` | Configuration settings, tool paths, regex patterns, wordlists |
 | `db_hunter` | Database exposure hunter (connection string, DB terbuka) |
 | `deep_exploit_engine` | Target-specific offensive exploit orchestration |
-| `engagement` | Engagement authorization — validasi nyata untuk penggunaan bug bounty ofensif |
-| `evidence_bundle` | Portable, redacted, integrity-checkable evidence bundles (SHA-256 manifest) |
+| `engagement` | Kebijakan scope dan teknik program opsional; bila dimuat tetap divalidasi |
+| `evidence_bundle` | Portable, redacted, integrity-checkable evidence bundles (SHA-256 manifest, `coverage.md`) |
 | `exploit_engine` | Active, non-destructive exploit verification dengan normalized evidence |
 | `export_analyzer` | Analisis hasil scan export dengan exploit proof |
 | `findings` | Normalized finding lifecycle + kontrak review AI dan manusia |
 | `fp_killer` | False-Positive Kill Gate — gerbang anti temuan palsu |
 | `http_verifier` | HTTP verification evidence-first dengan scope, URL policy, traffic controls |
-| `js_analyzer` | Deep Modern JavaScript Bundle & API Tracing Engine |
+| `js_analyzer` | Deep JavaScript/API tracing plus evidence-bound EVM/Solana RPC, contract, proxy, program, chain, dan ABI recon |
 | `modern_engine` | Modern Behavioral Engine — injection & misconfiguration detection |
 | `nuclei_matcher` | Nuclei CVE template matcher — DISCOVERED tech match jadi VERIFIED |
 | `offensive_intel_db` | Offensive intelligence database dari bug bounty & CVE exploit nyata |
 | `post_auth_hunter` | Post-Auth Surface Hunter — behavioral, context-specific, adaptive |
 | `recon_depth` | Passive recon depth: WAF fingerprinting, TLS certificate inspection |
-| `recon_pipeline` | Reconnaissance Pipeline Orchestrator |
+| `recon_pipeline` | Multi-host Web2 recon: source-aware subfinder, budget-bounded httpx, full GAU ingest, Katana JSONL form/method/technology mapping |
 | `reference_clients` | Read-only official reference clients untuk hypothesis selection |
 | `reference_intel` | Read-only reference & patch intelligence |
 | `report_builder` | Evidence-bound Bug Bounty reporting tanpa inferred-impact fabrication |
@@ -83,11 +86,11 @@ Target & mode:
   --port (8899)                 Port dashboard
   --preset                      Audit preset (lihat daftar di bawah)
   --json                        Output JSON
-  --offensive                   Mode ofensif (wajib engagement + objective)
+  --offensive                   Mode ofensif (wajib kelas kerentanan)
   --aggressive                  Mode agresif
 
 Kontrol scope & engagement:
-  --engagement-file             Engagement JSON (wajib untuk ofensif)
+  --engagement-file             Engagement JSON opsional untuk scope program
   --objective                   Objective ofensif
   --vuln-class                  Kelas kerentanan (repeatable: idor, bola, ...)
   --scope-include / --scope-exclude   Domain in/out scope (repeatable)
@@ -137,11 +140,12 @@ adaptive backoff aktif di semua preset, 429 menurunkan throttle host otomatis.
 
 ## Web Dashboard (`redteam_agent/web/`)
 
-- Auth dashboard (token, `--web-auth-token`)
+- Dashboard lokal tanpa token; bind LAN memakai token (`--web-auth-token`)
 - Tab scan: preset, target, surface filter
-- Upload auth context, engagement JSON, request corpus (HAR)
+- Upload opsional auth context, engagement JSON, request corpus (HAR)
 - Scan launcher + SSE real-time stream (`/api/stream/{taskId}`)
 - Terminal log live, progress bar, tabel hasil interaktif
+- Tab Web3 untuk RPC identity, bytecode-backed contract/program inventory, EIP-1967 proxy, dan ABI surface
 - Theme toggle (tactical)
 
 ## redteam_lab — Lab Lokal Dikeraskan
@@ -158,12 +162,12 @@ Target web lokal **tanpa vuln sengaja** untuk menguji kejujuran tools:
 
 | Kontrol | Fungsi |
 |---|---|
-| `scope_manager` | Tolak semua tujuan di luar scope engagement |
+| `scope_manager` | Tolak tujuan di luar host target atau scope program opsional |
 | `traffic_controller` | Pacing, concurrency, retry/backoff, budget — anti-ban |
 | `fp_killer` | Gerbang anti false-positive sebelum temuan naik status |
 | `vrt_triage` | Anti-N/A: temuan tidak boleh dibuang tanpa pembuktian |
 | `redaction` | Secret lokal tidak pernah masuk hasil publik |
-| `engagement` | Validasi otorisasi tertulis sebelum traffic ofensif |
+| `engagement` | Validasi scope dan teknik program bila file opsional dimuat |
 
 ## Mapping Standar
 

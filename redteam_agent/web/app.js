@@ -179,8 +179,7 @@ function initAuthContext() {
   });
 }
 
-/* Signed/approved engagement metadata. Keep identity documents and signatures
- * out of this file; it stores only a reference to the written authorization. */
+/* Program policy or audit scope metadata; retain only its reference here. */
 function initEngagement() {
   const input = document.getElementById("engagement-file");
   const status = document.getElementById("engagement-status");
@@ -192,7 +191,7 @@ function initEngagement() {
       const parsed = JSON.parse(await file.text());
       if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) throw new Error("root must be an object");
       loadedEngagement = parsed;
-      status.textContent = `Loaded: ${parsed.engagement_id || "missing ID"}; authorization ${parsed.authorization_reference || parsed.authorization_ref || "missing reference"}; expires ${parsed.expires_at || "unknown"}.`;
+      status.textContent = `Loaded: ${parsed.engagement_id || "missing ID"}; policy ${parsed.authorization_reference || parsed.authorization_ref || "missing reference"}; expires ${parsed.expires_at || "ongoing"}.`;
       status.className = "text-dim";
     } catch (err) {
       loadedEngagement = null;
@@ -529,6 +528,9 @@ async function loadScanResults(taskId) {
     // Update Tab Badges
     document.getElementById("badge-surface").textContent = (res.subdomains.length + res.endpoints.length);
     document.getElementById("badge-js").textContent = (res.js_assets.length);
+    const web3 = res.web3_recon || {};
+    document.getElementById("badge-web3").textContent =
+      ((web3.rpc_endpoints || []).length + (web3.contracts || []).length + (web3.solana_accounts || []).length);
     const cloud = res.cloud_baas || {supabase: [], harvested_tokens: []};
     document.getElementById("badge-cloud").textContent =
       ((cloud.supabase || []).length + (cloud.firebase || []).length + (cloud.vercel || []).length + (cloud.harvested_tokens || []).length + (((res.hidden_assets || {}).baas_projects || []).length));
@@ -554,6 +556,7 @@ async function loadScanResults(taskId) {
 
     // Populate Tab 4: JS & API Vault
     populateJSVault(res);
+    populateWeb3(res);
 
     // First-class hidden discovery views use the same redacted engine output
     // returned to CLI/export; no browser-side secret reconstruction occurs.
@@ -661,11 +664,8 @@ function populateDeepExploit(res) {
   setText("deep-exploit-intel-enriched", intelEnriched);
   
   // Update intelligence status panel
-  if (intelEnriched > 0) {
-    setText("intel-auto-enrich", `Active (${intelEnriched} enriched)`);
-  } else {
-    setText("intel-auto-enrich", "Ready");
-  }
+  setText("intel-auto-enrich", intelEnriched > 0
+    ? `Applied (${intelEnriched} target-matched)` : "Observed fields only");
 
   renderTable(document.getElementById("deep-exploit-plan-tbody"), plan.slice(0, 300).map(item => [
     cell(item.technique || "unknown", "", "strong"), cell(item.method || "GET", "", "badge"),
@@ -764,6 +764,42 @@ function populateJSVault(res) {
   renderTable(grepTbody, grepMatches.slice(0, 100).map(g => [
     cell(g.pattern, "", "badge"), cell(g.value, "", "code"), cell(g.source, "text-dim"), cell(g.context, "text-dim")
   ]), "No grep matches yet.", 4);
+}
+
+function populateWeb3(res) {
+  const web3 = res.web3_recon || {};
+  const stats = web3.stats || {};
+  const contracts = web3.contracts || [];
+  const solana = web3.solana_accounts || [];
+  const abi = web3.abi_functions || [];
+  const setText = (id, value) => { const el = document.getElementById(id); if (el) el.textContent = value; };
+  setText("web3-rpc-count", stats.rpc_verified || 0);
+  setText("web3-contract-count", stats.contracts_verified || 0);
+  setText("web3-proxy-count", stats.proxies_verified || 0);
+  setText("web3-program-count", stats.solana_programs_verified || 0);
+  setText("web3-abi-count", `${abi.length} functions`);
+
+  renderTable(document.getElementById("web3-rpc-tbody"), (web3.rpc_endpoints || []).map(rpc => [
+    cell(rpc.protocol || "unknown", "", "badge"), cell(rpc.chain_id ?? rpc.node_version ?? "—"),
+    cell(rpc.url || "—", "", "code"), cell(rpc.status || "CANDIDATE"),
+    cell((rpc.sources || [rpc.source]).filter(Boolean).join(", ") || "—", "text-dim")
+  ]), "No Web3 RPC evidence yet.", 5);
+
+  const contractRows = contracts.map(contract => [
+    cell("EVM", "", "badge"), cell(contract.address, "", "code"), cell(contract.chain_id ?? "—"),
+    cell(contract.status || "CANDIDATE"), cell((contract.proxy || {}).implementation || "—", "", "code"),
+    cell((contract.sources || [contract.source]).filter(Boolean).join(", ") || "—", "text-dim")
+  ]).concat(solana.map(account => [
+    cell(account.executable ? "SOLANA PROGRAM" : "SOLANA ACCOUNT", "", "badge"), cell(account.address, "", "code"),
+    cell(account.owner || "—", "", "code"), cell(account.status || "CANDIDATE"), cell("—"),
+    cell((account.sources || [account.source]).filter(Boolean).join(", ") || "—", "text-dim")
+  ]));
+  renderTable(document.getElementById("web3-contract-tbody"), contractRows,
+    "No contract or program evidence yet.", 6);
+  renderTable(document.getElementById("web3-abi-tbody"), abi.map(item => [
+    cell(item.signature || item.name, "", "code"), cell((item.surface_tags || []).join(", ") || "—"),
+    cell((item.sources || [item.source]).filter(Boolean).join(", ") || "—", "text-dim")
+  ]), "No ABI functions extracted yet.", 3);
 }
 
 function populateReconDepth(res) {
@@ -965,8 +1001,8 @@ function populatePolicy(res) {
   const scope = res.scope || {};
   const engagement = res.engagement || {};
   const focus = res.hunt_focus || {};
-  const engagementLabel = engagement.authorization_validated ?
-    `${engagement.engagement_id} / ${engagement.authorization_reference}` : "passive session";
+  const engagementLabel = engagement.engagement_id ?
+    `${engagement.engagement_id} / ${engagement.authorization_reference}` : "exact target";
   const classLabel = (focus.vulnerability_classes || []).join(", ") || "no active class";
   document.getElementById("policy-scope-summary").textContent =
     `${engagementLabel} · focus: ${classLabel} · Include: ${(scope.include || []).join(", ") || "none"}; Exclude: ${(scope.exclude || []).join(", ") || "none"}`;

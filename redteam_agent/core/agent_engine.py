@@ -5,7 +5,7 @@ from __future__ import annotations
 import asyncio
 import datetime
 import urllib.parse
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 from redteam_agent.core.cloud_baas_hunter import CloudBaaSHunter
 from redteam_agent.core.config import SCAN_PRESETS, DEFAULT_BYPASS_REQUEST_BUDGET, DEFAULT_REQUEST_BUDGET, MAX_BYPASS_DEPTH
@@ -125,6 +125,21 @@ class RedTeamAgentEngine:
                 )
             verifier = HTTPVerifier(timeout=task.traffic_controller.config["timeout"], traffic_controller=task.traffic_controller,
                                     scope_manager=task.scope_manager, module="pipeline")
+
+            def global_budget(reserve: int = 0) -> Optional[int]:
+                """Live ceiling from the shared traffic controller, minus a verification reserve."""
+                try:
+                    stats = task.traffic_controller.stats()
+                    value = stats.get("requests_remaining")
+                    if value is None:
+                        return None
+                    return max(0, int(value) - max(0, int(reserve)))
+                except (AttributeError, TypeError, ValueError):
+                    return None
+
+            startup_budget = global_budget(8)
+            pipeline_bypass_budget = (task.bypass_budget if startup_budget is None
+                                      else min(task.bypass_budget, startup_budget))
             if task.browser_verify:
                 # The browser is lazy: importing/constructing the adapter does
                 # not launch anything. It is only invoked by a discovered
@@ -139,38 +154,34 @@ class RedTeamAgentEngine:
             # Reference lookups are still network activity.  Give the CISA
             # client a narrow reference scope but the same task controller so
             # it cannot bypass the scan-wide request budget.
-            task_threat_intel = ThreatIntelEngine(verifier=HTTPVerifier(
-                timeout=task.traffic_controller.config["timeout"],
-                traffic_controller=task.traffic_controller,
-                scope_manager=ScopeManager(["www.cisa.gov"], resolve_dns=False),
-                module="threat_intel",
-            ))
+            def engine_verifier(module_name: str, scope_manager=None) -> HTTPVerifier:
+                """Share one keep-alive pool and TLS context across pipeline engines."""
+                return HTTPVerifier(
+                    timeout=task.traffic_controller.config["timeout"],
+                    traffic_controller=task.traffic_controller,
+                    scope_manager=scope_manager or task.scope_manager,
+                    module=module_name,
+                    pool=verifier._pool,
+                    ssl_context=verifier.ssl_context,
+                )
+
+            task_threat_intel = ThreatIntelEngine(verifier=engine_verifier(
+                "threat_intel", ScopeManager(["www.cisa.gov"], resolve_dns=False)))
             js_analyzer = JSAnalyzer(verifier=verifier, scope_manager=task.scope_manager)
             baas_hunter = CloudBaaSHunter(verifier=verifier, scope_manager=task.scope_manager)
             recon_depth = ReconDepth(task, verifier)
-            exploit_engine = ExploitEngine(HTTPVerifier(timeout=task.traffic_controller.config["timeout"],
-                traffic_controller=task.traffic_controller, scope_manager=task.scope_manager, module="exploit_verifier"),
+            exploit_engine = ExploitEngine(engine_verifier("exploit_verifier"),
                 exploit_mode=task.exploit_mode, browser_verifier=browser_verifier)
             bypass_engine = BypassEngine(
-                verifier=HTTPVerifier(
-                    timeout=task.traffic_controller.config["timeout"],
-                    traffic_controller=task.traffic_controller,
-                    scope_manager=task.scope_manager,
-                    module="bypass_engine",
-                ),
+                verifier=engine_verifier("bypass_engine"),
                 exploit_mode=task.exploit_mode,
-                request_budget=task.bypass_budget,
+                request_budget=pipeline_bypass_budget,
                 max_depth=task.max_depth,
             )
             deep_exploit_engine = DeepExploitEngine(
-                verifier=HTTPVerifier(
-                    timeout=task.traffic_controller.config["timeout"],
-                    traffic_controller=task.traffic_controller,
-                    scope_manager=task.scope_manager,
-                    module="deep_exploit_engine",
-                ),
+                verifier=engine_verifier("deep_exploit_engine"),
                 exploit_mode=task.exploit_mode,
-                request_budget=task.bypass_budget,
+                request_budget=pipeline_bypass_budget,
                 max_depth=task.max_depth,
                 reference_intel=bypass_engine.reference_intel,
                 browser_verifier=browser_verifier,
@@ -240,7 +251,7 @@ class RedTeamAgentEngine:
                     "observed": False, "in_scope": True}]
 
             js_results = {"js_assets": [], "routes": [], "secrets": [], "hidden_params": [],
-                          "external_discoveries": [], "probed_routes": []}
+                          "external_discoveries": [], "probed_routes": [], "web3": {}}
             if "js_analyzer" in modules:
                 await task.emit_log("INFO", "[JS] Analyzing bundles and feeding sourcemap sources back into discovery", "JS & API Analysis", 55)
                 js_results = await asyncio.to_thread(js_analyzer.analyze_target, target_url)
@@ -258,27 +269,63 @@ class RedTeamAgentEngine:
                 task.results["stats"]["secrets_found"] = len(js_results.get("secrets", []))
                 task.results["stats"]["js_grep_matches"] = len(task.results["js_grep"])
                 task.results["stats"]["js_api_calls"] = len(task.results["js_api_trace"])
+                task.results["web3_recon"] = self.redactor.redact_json(js_results.get("web3") or {})
+                web3_stats = task.results["web3_recon"].get("stats") or {}
+                task.results["stats"]["web3_rpc_verified"] = web3_stats.get("rpc_verified", 0)
+                task.results["stats"]["web3_contracts_verified"] = web3_stats.get("contracts_verified", 0)
+                task.results["stats"]["web3_proxies_verified"] = web3_stats.get("proxies_verified", 0)
+                task.results["stats"]["web3_programs_verified"] = web3_stats.get("solana_programs_verified", 0)
+                for rpc in task.results["web3_recon"].get("rpc_endpoints", []):
+                    if rpc.get("status") == "SKIPPED_OUT_OF_SCOPE":
+                        task.results["external_discoveries"].append({
+                            "value": rpc.get("url"), "source": "web3_rpc_from_frontend",
+                            "observed": True, "active_verification_skipped": "outside_scope",
+                        })
                 task.results["external_discoveries"].extend(js_results.get("external_discoveries", []))
                 task.results["tool_runs"].extend(js_results.get("failures", []))
-                endpoint_sources = {record["url"]: set(record.get("sources", [])) for record in task.results.get("endpoint_records", [])}
+                records_by_url = {
+                    record["url"]: dict(record)
+                    for record in task.results.get("endpoint_records", [])
+                    if isinstance(record, dict) and record.get("url")
+                }
                 for route in js_results.get("routes", []):
                     full = urllib.parse.urljoin(target_url, route)
                     scope = task.scope_manager.check_url(full, active=False)
                     if scope.get("in_scope"):
-                        endpoint_sources.setdefault(full, set()).add("js_bundle_or_sourcemap")
+                        full = scope.get("url") or full
+                        record = records_by_url.setdefault(full, {
+                            "url": full, "sources": [], "observed": True, "in_scope": True,
+                            "method": "GET", "methods": ["GET"], "body_fields": [],
+                            "content_types": [], "status_codes": [], "technologies": [],
+                            "priority_score": 0, "priority_reasons": [],
+                        })
+                        record["sources"] = sorted(set(record.get("sources", [])) | {"js_bundle_or_sourcemap"})
+                        record["observed"] = True
                     else:
                         task.results["external_discoveries"].append({"value": full, "source": "js_bundle_or_sourcemap",
                             "observed": True, "active_verification_skipped": "outside_scope"})
-                endpoints = sorted(endpoint_sources)
-                task.results["endpoint_records"] = [{"url": url, "sources": sorted(sources),
-                    "observed": any(source != "configured_target" for source in sources),
-                    "in_scope": task.scope_manager.check_url(url, active=False).get("in_scope", False)}
-                    for url, sources in endpoint_sources.items()]
+                task.results["endpoint_records"] = sorted(
+                    records_by_url.values(), key=lambda item: (-int(item.get("priority_score", 0)), item["url"]))
+                endpoints = [item["url"] for item in task.results["endpoint_records"]]
                 task.results["endpoints"] = endpoints
+                task.results["stats"]["endpoints"] = len(endpoints)
                 await task.emit_log("SUCCESS", f"[JS] {len(js_results.get('routes', []))} routes, "
                     f"{len(js_results.get('secrets', []))} classified token patterns", progress=65)
+                if task.results["web3_recon"].get("detected"):
+                    await task.emit_log(
+                        "SUCCESS",
+                        f"[WEB3] {web3_stats.get('rpc_verified', 0)} RPC verified, "
+                        f"{web3_stats.get('contracts_verified', 0)} EVM contract(s), "
+                        f"{web3_stats.get('proxies_verified', 0)} EIP-1967 proxy(s), "
+                        f"{web3_stats.get('solana_programs_verified', 0)} Solana program(s)",
+                        progress=66,
+                    )
 
             all_findings: list[dict] = []
+            captured_dicts = [record.to_dict() for record in captured_records]
+            offensive_records = list(captured_dicts)
+            hidden_report: Dict[str, Any] = {"endpoints": [], "baas_projects": []}
+            hidden_stats: Dict[str, Any] = {}
             # First-class modern frontend discovery.  It shares the task's
             # scope manager and traffic controller; no secondary downloader
             # or ambient browser profile is created.  The legacy JS/BaaS
@@ -340,7 +387,6 @@ class RedTeamAgentEngine:
                 task.results["stats"]["source_maps_parsed"] = hidden_stats.get("source_maps", 0)
                 task.results["stats"]["auth_flows"] = hidden_stats.get("auth_flows", 0)
                 task.results["stats"]["credential_relationships"] = hidden_stats.get("relationships", 0)
-                captured_dicts = [record.to_dict() for record in captured_records]
                 captured_public_dicts = []
                 for record in captured_dicts:
                     public_record = dict(record)
@@ -361,51 +407,99 @@ class RedTeamAgentEngine:
                 task.results["endpoint_records"] = existing_endpoint_records
                 all_findings.extend(hidden_report.get("findings", []))
                 offensive_records = [*captured_dicts, *hidden_report.get("endpoints", [])]
-            # Modern behavioral injection & misconfiguration engine: boolean
-            # oracle SQLi, SSTI arithmetic, median command timing, cache
-            # poisoning, security headers, and DOM XSS data-flow.  No signature
-            # payloads — every detector compares actual application behavior.
+            endpoints = list(dict.fromkeys(endpoints))
+            task.results["endpoints"] = endpoints
+            task.results["stats"]["endpoints"] = len(endpoints)
+            offensive_urls = {
+                (str(item.get("url") or ""), str(item.get("method") or "GET").upper())
+                for item in offensive_records if isinstance(item, dict)
+            }
+            for endpoint_record in task.results.get("endpoint_records", []):
+                if not isinstance(endpoint_record, dict):
+                    continue
+                endpoint = str(endpoint_record.get("url") or "")
+                fields = list(endpoint_record.get("body_fields") or [])
+                methods = list(endpoint_record.get("methods") or [endpoint_record.get("method") or "GET"])
+                if not urllib.parse.urlparse(endpoint).query and not fields and set(methods) <= {"GET", "HEAD", "OPTIONS"}:
+                    continue
+                for method in methods:
+                    key = (endpoint, str(method).upper())
+                    if key in offensive_urls:
+                        continue
+                    offensive_records.append({
+                        "url": endpoint, "method": key[1], "body_shape": {"fields": fields},
+                        "auth_required": False,
+                        "source_file": ",".join(endpoint_record.get("sources") or []) or "crawler_endpoint",
+                        "metadata": {"priority_reasons": endpoint_record.get("priority_reasons") or []},
+                    })
+                    offensive_urls.add(key)
+            # Keep supplemental SSTI and browser/static XSS checks separate
+            # from the focused RCE, SSRF, and SQLi planner.
             if task.offensive:
                 from redteam_agent.core.modern_engine import ModernEngine
                 modern = ModernEngine(verifier)
+                selected_classes = {
+                    str(item).strip().lower().replace("_", "-")
+                    for item in task.hunt_focus.get("vulnerability_classes", [])
+                }
+                # Every behavioral detector is bound to an explicitly selected
+                # engagement class: the class list is the authorization contract
+                # for which attack behaviors may be exercised on the target.
+                wants_sqli = bool(selected_classes & {"sqli", "sql-injection"})
+                wants_ssti = "ssti" in selected_classes
+                wants_cmd = bool(selected_classes & {
+                    "rce", "remote-code-execution", "command-injection", "os-command-injection"})
+                wants_cache = bool(selected_classes & {
+                    "cache-poisoning", "cache-deception", "web-cache-poisoning"})
+                wants_xss = "xss" in selected_classes
+                # Aggressive engagements widen the per-sweep surface: more
+                # endpoints, more parameters per endpoint.  The shared traffic
+                # controller remains the hard request ceiling either way.
+                endpoint_cap = 60 if task.aggressive else 25
+                param_cap = 8 if task.aggressive else 4
+                modern_budget = global_budget(16)
+                if modern_budget is not None:
+                    per_endpoint = max(1, param_cap * 3 + 1)
+                    endpoint_cap = min(endpoint_cap, modern_budget // per_endpoint)
+                cmd_param_tokens = ("host", "ip", "ping", "exec", "cmd", "command",
+                                    "dst", "target", "domain", "url", "callback",
+                                    "addr", "server", "endpoint", "webhook", "fetch")
                 modern_targets = sorted(
                     [url for url in endpoints
                      if task.scope_manager.check_url(url, active=True).get("allowed")],
                     key=lambda u: 0 if urllib.parse.urlparse(u).query else 1,
-                )[:10]
+                )[:endpoint_cap]
                 modern_findings: List[Dict[str, Any]] = []
                 modern_stats = {"endpoints_tested": 0, "sqli_boolean": 0,
                                 "ssti_arithmetic": 0, "cmd_time": 0,
-                                "cache_poisoning": 0, "headers_audit": 0,
-                                "dom_xss": 0}
+                                "cache_poisoning": 0, "dom_xss": 0}
                 for endpoint in modern_targets:
                     modern_stats["endpoints_tested"] += 1
                     parsed = urllib.parse.urlparse(endpoint)
                     params = list(urllib.parse.parse_qs(parsed.query).keys())
-                    finding = modern.security_headers_audit(endpoint)
-                    if finding:
-                        modern_findings.append(finding)
-                        modern_stats["headers_audit"] += 1
-                    finding = modern.cache_poisoning(endpoint)
-                    if finding:
-                        modern_findings.append(finding)
-                        modern_stats["cache_poisoning"] += 1
-                    for param in params[:2]:
-                        finding = modern.sqli_boolean_differential(endpoint, param)
-                        if finding:
-                            modern_findings.append(finding)
-                            modern_stats["sqli_boolean"] += 1
-                        finding = modern.ssti_arithmetic_multi_engine(endpoint, param)
-                        if finding:
-                            modern_findings.append(finding)
-                            modern_stats["ssti_arithmetic"] += 1
-                        if param.lower() in {"host", "ip", "ping", "exec", "cmd",
-                                              "command", "dst", "target", "domain"}:
-                            finding = modern.cmd_time_based_median(endpoint, param, samples=2)
+                    for param in params[:param_cap]:
+                        if wants_sqli:
+                            finding = modern.sqli_boolean_differential(endpoint, param)
+                            if finding:
+                                modern_findings.append(finding)
+                                modern_stats["sqli_boolean"] += 1
+                        if wants_ssti:
+                            finding = modern.ssti_arithmetic_multi_engine(endpoint, param)
+                            if finding:
+                                modern_findings.append(finding)
+                                modern_stats["ssti_arithmetic"] += 1
+                        if wants_cmd and any(token in param.lower() for token in cmd_param_tokens):
+                            finding = modern.cmd_time_based_median(endpoint, param)
                             if finding:
                                 modern_findings.append(finding)
                                 modern_stats["cmd_time"] += 1
-                dom_findings = modern.dom_xss_analysis(js_results.get("js_assets", []))
+                    if wants_cache:
+                        finding = modern.cache_poisoning(endpoint)
+                        if finding:
+                            modern_findings.append(finding)
+                            modern_stats["cache_poisoning"] += 1
+                dom_findings = modern.dom_xss_analysis(js_results.get("js_assets", [])) \
+                    if wants_xss else []
                 modern_stats["dom_xss"] = len(dom_findings)
                 modern_findings.extend(dom_findings)
                 task.results["modern_engine"] = {
@@ -423,8 +517,14 @@ class RedTeamAgentEngine:
                         f"{modern_stats['ssti_arithmetic']} ssti, "
                         f"{modern_stats['cmd_time']} cmd-time, "
                         f"{modern_stats['cache_poisoning']} cache-poison, "
-                        f"{modern_stats['headers_audit']} headers, "
                         f"{modern_stats['dom_xss']} dom-xss",
+                        "Modern Behavioral Engine", 79,
+                    )
+                elif any((wants_sqli, wants_ssti, wants_cmd, wants_cache,
+                          wants_xss)):
+                    await task.emit_log(
+                        "INFO",
+                        f"[MODERN] No behavioral finding on {modern_stats['endpoints_tested']} endpoint(s)",
                         "Modern Behavioral Engine", 79,
                     )
 
@@ -435,12 +535,15 @@ class RedTeamAgentEngine:
                         "Deep Offensive Exploit Planner",
                         76,
                     )
+                    live_budget = global_budget(8)
+                    offensive_budget = (pipeline_bypass_budget if live_budget is None
+                                        else min(pipeline_bypass_budget, live_budget))
                     offensive_audit = await asyncio.to_thread(
                         deep_exploit_engine.run_discovered,
                         offensive_records,
                         baas_projects=hidden_report.get("baas_projects", []),
                         auth_context=task.auth_context,
-                        request_budget=task.bypass_budget,
+                        request_budget=offensive_budget,
                         max_depth=task.max_depth,
                         techniques=task.hunt_focus.get("vulnerability_classes"),
                     )
@@ -525,12 +628,6 @@ class RedTeamAgentEngine:
                         "Post-Auth Behavioral Hunt", 78,
                     )
 
-                    await task.emit_log(
-                        "INFO",
-                        f"[MODERN] No behavioral finding on {modern_stats['endpoints_tested']} endpoint(s)",
-                        "Modern Behavioral Engine", 79,
-                    )
-
             if "cloud_baas" in modules:
                 await task.emit_log("INFO", "[BAAS] Correlating provider/config boundaries and validating only linked in-scope projects", "Cloud BaaS Correlation", 70)
                 if discovery_enabled:
@@ -582,10 +679,14 @@ class RedTeamAgentEngine:
             if "param_miner" in modules:
                 params = await recon.run_param_miner(target_url)
                 task.results["hidden_params"] = sorted(set(task.results["hidden_params"]) | set(params))
+            ffuf_done = False
             if "ffuf" in modules:
                 ffuf_results = await recon.run_ffuf(target_url)
                 task.results["ffuf_results"] = ffuf_results
-            if "ffuf" in modules or "exploit_verifier" in modules:
+                ffuf_done = any(run.get("tool") == "ffuf" and run.get("status") in {"success", "no_output"}
+                                for run in task.results.get("tool_runs", []))
+            if not ffuf_done and ("sensitive_path_fuzz" in modules or "exploit_verifier" in modules
+                                  or "ffuf" in modules):
                 task.results["sensitive_path_candidates"] = await recon.run_sensitive_path_fuzzing(target_url)
 
             if "recon_depth" in modules:

@@ -2,13 +2,13 @@
 
 An engagement record is the authorization contract for offensive testing:
 - allowed_targets: exact hosts or wildcard suffixes (e.g. "example.com", "*.example.com")
-- expires_at: ISO-8601 timestamp; sessions after expiry are rejected
+- expires_at: optional ISO-8601 timestamp; sessions after expiry are rejected
 - prohibited_techniques: never allowed (denial-of-service, destructive-write, ...)
-- allowed_techniques: vulnerability classes the engagement authorizes
+- allowed_techniques: optional allowlist when the program defines one
 - emergency_contact: recorded but never exported in public summaries
 
-Every offensive scan MUST carry an engagement record. The no-op stub era is
-over: validation is enforced at task creation and at web API entry points.
+An engagement record is optional. Without one, offensive scans stay on the
+exact target host; supplied records are validated at task creation and API entry.
 """
 
 from __future__ import annotations
@@ -28,8 +28,10 @@ HARD_PROHIBITED = {
 IMPLEMENTED_CLASSES = frozenset({
     "idor", "bola", "bfla",
     "xss", "sqli", "sql-injection", "ssrf", "ssti",
+    "rce", "remote-code-execution", "command-injection", "os-command-injection",
     "open-redirect", "graphql", "cloud-baas",
     "authorization", "auth-bypass",
+    "cache-poisoning",
 })
 
 
@@ -49,8 +51,8 @@ class EngagementProfile:
                  allowed_techniques: Optional[Sequence[str]] = None,
                  emergency_contact: str = "",
                  notes: Optional[Sequence[str]] = None):
-        self.engagement_id = str(engagement_id or "local")
-        self.authorization_reference = str(authorization_reference or "local")
+        self.engagement_id = str(engagement_id or "local").strip()
+        self.authorization_reference = str(authorization_reference or "local").strip()
         self.allowed_targets = tuple(str(item).strip() for item in (allowed_targets or ()) if str(item).strip())
         self.expires_at = expires_at
         self.prohibited_techniques = tuple(str(item).strip() for item in (prohibited_techniques or ()) if str(item).strip())
@@ -106,10 +108,18 @@ class EngagementProfile:
 
     def assert_active(self, now: Optional[dt.datetime] = None) -> None:
         now = now or dt.datetime.now(dt.timezone.utc)
-        expiry = self._expires_dt()
-        if expiry is not None and expiry < now:
+        if (not self.engagement_id or not self.authorization_reference
+                or self.engagement_id.lower() == "local" or self.authorization_reference.lower() == "local"
+                or not self.allowed_targets):
             raise EngagementError(
-                f"engagement {self.engagement_id} expired at {self.expires_at}")
+                "engagement requires an ID, program policy or authorization reference, and allowed targets")
+        if self.expires_at:
+            expiry = self._expires_dt()
+            if expiry is None or expiry.tzinfo is None:
+                raise EngagementError("engagement expiry must be an ISO-8601 timestamp with timezone")
+            if expiry < now:
+                raise EngagementError(
+                    f"engagement {self.engagement_id} expired at {self.expires_at}")
 
     @staticmethod
     def _host_of(value: str) -> str:
@@ -121,8 +131,6 @@ class EngagementProfile:
         return host.rstrip(".").lower()
 
     def _target_allowed(self, target: str) -> bool:
-        if not self.allowed_targets:
-            return True  # no targets configured = unrestricted local mode
         host = self._host_of(target)
         if not host:
             return False
@@ -132,9 +140,9 @@ class EngagementProfile:
                 continue
             if allowed_host.startswith("*."):
                 suffix = allowed_host[1:]  # ".example.com"
-                if host == allowed_host[2:] or host.endswith(suffix):
+                if host.endswith(suffix):
                     return True
-            elif host == allowed_host or host.endswith("." + allowed_host):
+            elif host == allowed_host:
                 return True
         return False
 
@@ -143,7 +151,7 @@ class EngagementProfile:
         if not self._target_allowed(target):
             raise EngagementError(
                 f"target {target} is outside engagement scope "
-                f"(allowed: {', '.join(self.allowed_targets) or 'unrestricted'})")
+                f"(allowed: {', '.join(self.allowed_targets)})")
         if requested_scope:
             for scope_item in requested_scope:
                 if not self._target_allowed(str(scope_item)):
@@ -153,12 +161,17 @@ class EngagementProfile:
     def assert_techniques(self, techniques: Optional[Sequence[str]] = None) -> None:
         if not techniques:
             return
+        prohibited = {item.lower().replace("_", "-") for item in self.prohibited_techniques} | HARD_PROHIBITED
+        allowed = {item.lower().replace("_", "-") for item in self.allowed_techniques}
         for technique in techniques:
-            tech = str(technique).strip().lower()
-            if tech in self.prohibited_techniques or tech in HARD_PROHIBITED:
+            tech = str(technique).strip().lower().replace("_", "-")
+            if tech in prohibited:
                 raise EngagementError(
                     f"technique {technique} is prohibited by engagement "
                     f"{self.engagement_id}")
+            if allowed and tech not in allowed:
+                raise EngagementError(
+                    f"technique {technique} is outside engagement allowed techniques")
 
     def validate_session(self, target: str,
                          requested_scope: Optional[Sequence[str]] = None,
@@ -183,12 +196,6 @@ class EngagementProfile:
             "objective": self.objective,
             "emergency_contact_recorded": bool(self.emergency_contact),
             "notes": list(self.notes),
-            "authorization_validated": True,
+            "authorization_validated": False,
+            "authorization_basis": "operator-provided program policy or audit reference; scope is not independently verified",
         }
-
-
-def engagement_required(offensive: bool,
-                        profile: Optional[EngagementProfile]) -> None:
-    """Raise EngagementError when an offensive session has no engagement record."""
-    if offensive and profile is None:
-        raise EngagementError("offensive scan requires --engagement-file")

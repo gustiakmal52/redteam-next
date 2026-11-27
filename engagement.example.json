@@ -1,32 +1,20 @@
 {
-  "engagement_id": "BB-2026-001",
-  "authorization_reference": "SIGNED-ROE-2026-001",
+  "engagement_id": "PROGRAM-NAME-OR-AUDIT-ID",
+  "authorization_reference": "OFFICIAL-PROGRAM-POLICY-URL-OR-AUDIT-ROE",
   "allowed_targets": [
-    "",
-    ""
+    "dinoiki.com",
+    "goku.co.id"
   ],
-  "expires_at": "2026-12-31T23:59:59+08:00",
+  "expires_at": null,
   "prohibited_techniques": [
     "denial-of-service",
     "social-engineering",
     "destructive-write"
   ],
-  "allowed_techniques": [
-    "idor",
-    "bola",
-    "sqli",
-    "xss",
-    "ssrf",
-    "auth-bypass",
-    "authorization",
-    "ssti",
-    "open-redirect",
-    "graphql",
-    "cloud-baas"
-  ],
+  "allowed_techniques": [],
   "objective": "Prove unauthorized confidentiality or integrity impact with non-destructive evidence.",
-  "emergency_contact": "See the signed Rules of Engagement; do not store personal contact data here.",
+  "emergency_contact": "See the program policy or audit Rules of Engagement; do not store personal contact data here.",
   "notes": [
-    "Use researcher-owned accounts and stop immediately on service instability."
+    "Copy the official scope and exclusions before testing. Use researcher-owned accounts."
   ]
 }

@@ -26,7 +26,7 @@
       <span class="brand-mark">RT</span>
       <div>
         <div class="brand-name">Gustiakmal RedTeam Next</div>
-        <div class="brand-sub">Offensive web security research console</div>
+        <div class="brand-sub">Offensive Web2 + Web3 security research console</div>
       </div>
     </div>
 
@@ -69,6 +69,7 @@
     <button class="tab-btn" data-tab="tab-terminal">Live Log <span class="tab-badge" id="badge-terminal">0</span></button>
     <button class="tab-btn" data-tab="tab-surface">Attack Surface <span class="tab-badge" id="badge-surface">0</span></button>
     <button class="tab-btn" data-tab="tab-js">JS &amp; API <span class="tab-badge" id="badge-js">0</span></button>
+    <button class="tab-btn" data-tab="tab-web3">Web3 <span class="tab-badge" id="badge-web3">0</span></button>
     <button class="tab-btn" data-tab="tab-cloud">BaaS <span class="tab-badge" id="badge-cloud">0</span></button>
     <button class="tab-btn" data-tab="tab-hidden-assets">Assets <span class="tab-badge" id="badge-hidden-assets">0</span></button>
     <button class="tab-btn" data-tab="tab-hidden-endpoints">Endpoints <span class="tab-badge" id="badge-hidden-endpoints">0</span></button>
@@ -90,7 +91,7 @@
         <div class="panel">
           <div class="panel-header">
             <h2>New scan</h2>
-            <span class="panel-tag">subfinder · httpx · gau · katana · js · baas · ffuf</span>
+            <span class="panel-tag">subfinder · httpx · gau · katana · js · web3 rpc · baas · ffuf</span>
           </div>
           <div class="panel-body">
             <div class="form-group">
@@ -211,16 +212,16 @@
               </div>
               <div class="form-group">
                 <label for="hunt-objective">Session objective</label>
-                <input type="text" id="hunt-objective" placeholder="Example: prove cross-tenant invoice read via IDOR">
+                <input type="text" id="hunt-objective" value="prove RCE, SSRF, or SQLi with deterministic evidence">
               </div>
               <div class="form-group">
-                <label for="vulnerability-classes">Vulnerability classes (max 2)</label>
-                <input type="text" id="vulnerability-classes" placeholder="idor, xss, sqli, ssrf, graphql, ...">
+                <label for="vulnerability-classes">Focused vulnerability classes</label>
+                <input type="text" id="vulnerability-classes" value="rce, ssrf, sqli" placeholder="rce, ssrf, sqli">
               </div>
               <div class="form-group">
-                <label for="engagement-file">Load authorization / engagement JSON</label>
+                <label for="engagement-file">Program scope JSON (optional)</label>
                 <input type="file" id="engagement-file" accept="application/json,.json">
-                <span id="engagement-status" class="text-dim">Required before any target traffic, including recon.</span>
+                <span id="engagement-status" class="text-dim">Without a file, offensive scans stay on the entered target.</span>
               </div>
               <div class="form-group">
                 <label for="request-corpus-file">Load target-specific requests (HAR/JSON)</label>
@@ -228,7 +229,7 @@
                 <span id="request-corpus-status" class="text-dim">Optional. Request values remain in memory; public output keeps only method, field names, and source evidence.</span>
               </div>
               <div class="form-group">
-                <label for="auth-context-file">Load researcher-owned auth context</label>
+                <label for="auth-context-file">Researcher-owned auth context (optional)</label>
                 <input type="file" id="auth-context-file" accept="application/json,.json">
                 <span id="auth-context-status" class="text-dim">No context loaded; no ambient browser profile is used.</span>
               </div>
@@ -456,6 +457,31 @@
       </div>
     </section>
 
+    <!-- Web3 recon -->
+    <section id="tab-web3" class="tab-pane">
+      <div class="js-stats-bar">
+        <div class="mini-card"><h4 id="web3-rpc-count">0</h4><span>RPC verified</span></div>
+        <div class="mini-card"><h4 id="web3-contract-count">0</h4><span>EVM contracts</span></div>
+        <div class="mini-card"><h4 id="web3-proxy-count">0</h4><span>EIP-1967 proxies</span></div>
+        <div class="mini-card"><h4 id="web3-program-count">0</h4><span>Solana programs</span></div>
+      </div>
+      <div class="panel">
+        <div class="panel-header"><h3>Read-only RPC identity</h3><span class="panel-tag">eth_chainId · getVersion</span></div>
+        <div class="panel-body table-responsive"><table class="table"><thead><tr><th>Protocol</th><th>Chain</th><th>Endpoint</th><th>Status</th><th>Source</th></tr></thead>
+          <tbody id="web3-rpc-tbody"><tr><td colspan="5" class="empty-cell">No Web3 RPC evidence yet.</td></tr></tbody></table></div>
+      </div>
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>Contract and program inventory</h3><span class="panel-tag">bytecode/account proof required</span></div>
+        <div class="panel-body table-responsive"><table class="table"><thead><tr><th>Type</th><th>Address</th><th>Chain / owner</th><th>Status</th><th>Proxy implementation</th><th>Source</th></tr></thead>
+          <tbody id="web3-contract-tbody"><tr><td colspan="6" class="empty-cell">No contract or program evidence yet.</td></tr></tbody></table></div>
+      </div>
+      <div class="panel mt-4">
+        <div class="panel-header"><h3>ABI attack surface</h3><span class="panel-tag" id="web3-abi-count">0 functions</span></div>
+        <div class="panel-body table-responsive"><table class="table"><thead><tr><th>Signature</th><th>Security tags</th><th>Source</th></tr></thead>
+          <tbody id="web3-abi-tbody"><tr><td colspan="3" class="empty-cell">No ABI functions extracted yet.</td></tr></tbody></table></div>
+      </div>
+    </section>
+
     <!-- Hidden modern assets -->
     <section id="tab-hidden-assets" class="tab-pane">
       <div class="js-stats-bar">
@@ -522,12 +548,12 @@
           <span class="panel-tag">CISA KEV · ExploitDB · HackerOne · Bugcrowd</span>
         </div>
         <div class="panel-body">
-          <p class="intel-desc">32+ proven exploit patterns from real bug bounty reports and CVE exploits. Intelligence automatically enriches attack hypotheses based on discovered endpoints and selected vulnerability classes.</p>
+          <p class="intel-desc">Reference patterns support analyst review. Active hypotheses come only from observed target fields and deterministic proof paths.</p>
           <div class="policy-metrics" id="intel-status">
             <span>Total Patterns <strong id="intel-total-patterns">32+</strong></span>
-            <span>Auto-Enrichment <strong id="intel-auto-enrich">Active</strong></span>
+            <span>Execution policy <strong id="intel-auto-enrich">Observed fields only</strong></span>
             <span>Sources <strong>4 databases</strong></span>
-            <span>Coverage <strong>IDOR · SQLi · XSS · SSRF · GraphQL · Auth</strong></span>
+            <span>Coverage <strong>RCE · SSRF · SQLi · IDOR · XSS · GraphQL · Auth</strong></span>
           </div>
         </div>
       </div>

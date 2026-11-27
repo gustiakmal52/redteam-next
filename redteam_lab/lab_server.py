@@ -544,9 +544,13 @@ class LabHandler(BaseHTTPRequestHandler):
             if self.command not in ("GET", "HEAD"):
                 return self._json(405, {"error": "method_not_allowed"})
             host = (params.get("host") or [""])[0]
-            # Deliberate time-based command-injection fixture: the payload
-            # "sleep 5" sleeps ~2.5s, "sleep 1" sleeps ~0.5s — a repeatable
-            # median shift the detector must catch (single spikes rejected).
+            # Deliberate time-based command-injection fixture. The focused RCE
+            # verifier must observe three delays in each of two shell syntax
+            # families while an inert string containing the same sleep text
+            # stays fast. The older 1s/5s behavior remains for compatibility.
+            if ";sleep 2" in host or "$(sleep 2)" in host:
+                time.sleep(2.0)
+                return self._json(200, {"host": host, "latency_ms": 2000})
             if "sleep 5" in host:
                 time.sleep(2.5)
                 return self._json(200, {"host": host, "latency_ms": 2500})

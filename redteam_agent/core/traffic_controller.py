@@ -165,8 +165,16 @@ class TrafficController:
                     state.stable_responses = 0
                     self._event(f"host {host} recovered; increasing to {state.current_rps:g} RPS")
 
-    def retry_delay(self, attempt: int) -> float:
-        return min(30.0, (2 ** attempt) + random.uniform(0, .25))
+    def retry_delay(self, attempt: int, headers: Optional[dict] = None) -> float:
+        """Single global backoff definition, shared with the HTTP verifier."""
+        cap = 30.0
+        backoff = min(cap, (2 ** max(0, min(int(attempt), 5))) + random.uniform(0, .25))
+        if headers and self.config.get("respect_retry_after"):
+            lowered = {str(k).lower(): str(v) for k, v in headers.items()}
+            retry_after = self._retry_after_seconds(lowered.get("retry-after"))
+            if retry_after:
+                return min(cap, max(backoff, retry_after))
+        return backoff
 
     def stats(self) -> dict:
         with self._lock:

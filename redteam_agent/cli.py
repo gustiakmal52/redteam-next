@@ -12,15 +12,15 @@ from pathlib import Path
 import uvicorn
 from redteam_agent.core.config import DEFAULT_BYPASS_REQUEST_BUDGET, DEFAULT_REQUEST_BUDGET, MAX_BYPASS_DEPTH, SCAN_PRESETS
 from redteam_agent.core.agent_engine import RedTeamAgentEngine
-from redteam_agent.core.engagement import EngagementError, EngagementProfile, engagement_required
+from redteam_agent.core.engagement import EngagementProfile
 from redteam_agent.core.evidence_bundle import EvidenceBundleBuilder
 
 def main():
     parser = argparse.ArgumentParser(description="Gustiakmal RedTeam Next (Anti-N/A & Anti-Halu)")
-    parser.add_argument("target_positional", nargs="?", help="Explicitly authorized target URL/domain (alternative to --url)")
+    parser.add_argument("target_positional", nargs="?", help="Target URL/domain; host becomes the technical boundary (alternative to --url)")
     parser.add_argument("--web", action="store_true", help="Launch the Web Command Center Dashboard")
     parser.add_argument("--port", type=int, default=8899, help="Web Dashboard Port (default: 8899)")
-    parser.add_argument("--url", type=str, help="Explicitly authorized target URL or domain to audit")
+    parser.add_argument("--url", type=str, help="Target URL or domain to audit")
     parser.add_argument("--preset", type=str, default="full", choices=sorted(SCAN_PRESETS.keys()), help="Audit Preset")
     parser.add_argument("--json", action="store_true", help="Output results in JSON format")
     parser.add_argument("--show-secrets", action="store_true",
@@ -62,7 +62,7 @@ def main():
     parser.add_argument("--scope-exclude", action="append", default=None, help="Excluded domain; repeatable")
     parser.add_argument("--exact-url", action="append", default=None, help="Additional exact in-scope URL; repeatable")
     parser.add_argument("--engagement-file", type=str, default=None,
-                        help="Authorization JSON required before any target traffic")
+                        help="Optional program policy JSON; without it, offensive scope is the exact target")
     parser.add_argument("--objective", type=str, default=None,
                         help="Single concrete hunt objective for this session")
     parser.add_argument("--vuln-class", action="append", default=None,
@@ -80,7 +80,7 @@ def main():
 
     if args.web:
         print("==========================================================================")
-        print(" 🚀 LAUNCHING GUSTIAKMAL REDTEAM NEXT WEB DASHBOARD")
+        print(" 🚀 LAUNCHING GUSTIAKMAL REDTEAM NEXT WEB DASHBOARD (ZERO REFUSAL)")
         print("==========================================================================")
         print(f"[*] Serving on: http://{args.listen}:{args.port}")
         print("[*] Real-Time SSE Streaming: ACTIVE")
@@ -98,9 +98,11 @@ def main():
     target = args.url or args.target_positional
     if not target:
         parser.error("--url (or positional target) is required unless --web is used")
+    if args.output_dir and Path(args.output_dir).expanduser().exists():
+        parser.error("--output-dir must be a new directory for this scan")
 
     print("==========================================================================", file=out)
-    print(" 🎯 GUSTIAKMAL REDTEAM NEXT (ANTI-N/A & ANTI-HALU CLI)", file=out)
+    print(" 🎯 GUSTIAKMAL REDTEAM NEXT (ZERO REFUSAL / ANTI-N/A / ANTI-HALU CLI)", file=out)
     print("==========================================================================", file=out)
     print(f"[*] Target: {target}", file=out)
     print(f"[*] Preset: {args.preset}\n", file=out)
@@ -205,7 +207,7 @@ def main():
     engagement_summary = results.get("engagement", {}) or {}
     focus_summary = results.get("hunt_focus", {}) or {}
     capture_summary = results.get("captured_requests", {}) or {}
-    print(f"• Engagement: {engagement_summary.get('engagement_id') or 'passive/non-offensive'}")
+    print(f"• Scope policy: {engagement_summary.get('engagement_id') or 'exact target'}")
     print(f"• Hunt Objective: {focus_summary.get('objective') or 'not recorded'}")
     print(f"• Focus Classes: {', '.join(focus_summary.get('vulnerability_classes') or []) or 'none'}")
     print(f"• Captured Request Shapes: {capture_summary.get('in_scope_unique_requests', 0)}")

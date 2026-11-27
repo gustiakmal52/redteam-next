@@ -109,6 +109,7 @@ class SecretRedactor:
     def __init__(self, mask_prefix: int = 6, mask_suffix: int = 4):
         self.mask_prefix = max(2, int(mask_prefix))
         self.mask_suffix = max(2, int(mask_suffix))
+        self._redaction_cache: Dict[tuple, str] = {}
 
     @staticmethod
     def is_placeholder(value: str) -> bool:
@@ -142,17 +143,25 @@ class SecretRedactor:
         return f"{raw[:self.mask_prefix]}...{raw[-self.mask_suffix:]}"
 
     def redact_text(self, text: str, known_values: Optional[Iterable[str]] = None) -> str:
-        """Redact credential-shaped values from free text."""
+        """Redact credential-shaped values from free text (single-pass + cache)."""
         if not text:
             return str(text or "")
-        result = str(text)
-        for match in self.TOKEN_RE.finditer(result):
-            result = result.replace(match.group(0), "[REDACTED]")
+        values = tuple(dict.fromkeys(
+            str(value) for value in (known_values or ()) if value and len(str(value)) >= 8
+        ))
+        cache_key = (str(text), values, self.mask_prefix, self.mask_suffix)
+        cached = self._redaction_cache.get(cache_key)
+        if cached is not None:
+            return cached
+
+        result = self.TOKEN_RE.sub("[REDACTED]", str(text))
         result = self.URL_CRED_RE.sub(r"\1[REDACTED]@", result)
-        if known_values:
-            for value in known_values:
-                if value and len(str(value)) >= 8:
-                    result = result.replace(str(value), "[REDACTED]")
+        for value in values:
+            result = result.replace(value, "[REDACTED]")
+
+        if len(self._redaction_cache) >= 4096:
+            self._redaction_cache.clear()
+        self._redaction_cache[cache_key] = result
         return result
 
     def redact_headers(self, headers: Optional[Dict[str, Any]]) -> Dict[str, Any]:

@@ -6,6 +6,8 @@ import datetime as dt
 import hashlib
 import io
 import json
+import shutil
+import tempfile
 import zipfile
 from pathlib import Path
 from typing import Any, Mapping
@@ -75,7 +77,14 @@ class EvidenceBundleBuilder:
 
     def write_directory(self, results: Mapping[str, Any], output_dir: str | Path) -> Path:
         destination = Path(output_dir).expanduser().resolve()
-        destination.mkdir(parents=True, exist_ok=True)
-        for name, content in self.files(results).items():
-            (destination / name).write_bytes(content)
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        if destination.exists() or destination.is_symlink():
+            raise FileExistsError(f"evidence bundle directory already exists: {destination}")
+        staging = Path(tempfile.mkdtemp(prefix=".evidence-", dir=destination.parent))
+        try:
+            for name, content in self.files(results).items():
+                (staging / name).write_bytes(content)
+            staging.rename(destination)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
         return destination

@@ -35,12 +35,6 @@ if [[ "${1:-}" == "--no-browser" ]]; then
 fi
 
 listen="127.0.0.1"
-if command -v ip >/dev/null 2>&1; then
-    route_ip="$(ip -4 route get 1.1.1.1 2>/dev/null | awk '{for (i = 1; i <= NF; i++) if ($i == "src") {print $(i + 1); exit}}')"
-    if [[ "$route_ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ && "$route_ip" != "127.0.0.1" ]]; then
-        listen="$route_ip"
-    fi
-fi
 
 listen_explicit=0
 port="8899"

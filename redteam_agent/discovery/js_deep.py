@@ -15,7 +15,9 @@ import hashlib
 import json
 import re
 import urllib.parse
-from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple
+from array import array
+from bisect import bisect_right
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple
 
 from redteam_agent.discovery.models import EndpointRecord
 from redteam_agent.discovery.redaction import SecretRedactor
@@ -26,8 +28,21 @@ _IDENTIFIER = r"[A-Za-z_$][\w$]*"
 _STRING_RE = re.compile(r"(?P<quote>['\"`])(?P<value>(?:\\.|(?!\1).)*?)(?P=quote)", re.DOTALL)
 
 
-def _line_number(text: str, offset: int) -> int:
-    return text[:offset].count("\n") + 1
+def _line_number_lookup(text: str) -> Callable[[int], int]:
+    line_starts = None
+
+    def line_number(offset: int) -> int:
+        nonlocal line_starts
+        if line_starts is None:
+            line_starts = array("Q", [0])
+            source = text or ""
+            newline = source.find("\n")
+            while newline >= 0:
+                line_starts.append(newline + 1)
+                newline = source.find("\n", newline + 1)
+        return bisect_right(line_starts, max(0, offset))
+
+    return line_number
 
 
 def _snippet(text: str, start: int, end: int, redactor: SecretRedactor) -> str:
@@ -176,6 +191,7 @@ class LightDataFlowAnalyzer:
         return "variable_reference"
 
     def analyze(self, text: str, source_file: str = "unknown", source_url: Optional[str] = None) -> Dict[str, Any]:
+        line_at = _line_number_lookup(text)
         variables: Dict[str, Dict[str, Any]] = {}
         definitions: List[Dict[str, Any]] = []
         relationships: List[Dict[str, Any]] = []
@@ -194,14 +210,14 @@ class LightDataFlowAnalyzer:
                 "masked_value": self.redactor.mask_secret(literal_value) if literal_value else None,
                 "sha256": self.redactor.fingerprint(literal_value) if literal_value else None,
                 "source_file": source_file, "source_url": source_url,
-                "source_line": _line_number(text, match.start()),
+                "source_line": line_at(match.start()),
             }
             definitions.append(variables[name])
             if "." in expr and not literal_value:
                 relationships.append({
                     "relationship_type": "data_flow",
                     "from": expr[:200], "to": name, "source": source_file,
-                    "source_line": _line_number(text, match.start()),
+                    "source_line": line_at(match.start()),
                 })
 
         for match in self.PROPERTY_ASSIGNMENT_RE.finditer(text or ""):
@@ -209,7 +225,7 @@ class LightDataFlowAnalyzer:
             expr = match.group("expr").strip()
             relationships.append({
                 "relationship_type": "property_assignment", "from": self.redactor.redact_text(expr)[:200],
-                "to": target, "source": source_file, "source_line": _line_number(text, match.start()),
+                "to": target, "source": source_file, "source_line": line_at(match.start()),
             })
 
         for match in self.STORAGE_SET_RE.finditer(text or ""):
@@ -217,14 +233,14 @@ class LightDataFlowAnalyzer:
             relationships.append({
                 "relationship_type": "storage_write",
                 "from": value_expr, "to": f"{match.group('store')}.{match.group('key')}",
-                "source": source_file, "source_line": _line_number(text, match.start()),
+                "source": source_file, "source_line": line_at(match.start()),
                 "storage": match.group("store"), "key": match.group("key"),
             })
         for match in self.STORAGE_GET_RE.finditer(text or ""):
             relationships.append({
                 "relationship_type": "storage_read",
                 "from": f"{match.group('store')}.{match.group('key')}", "to": "request_header_or_logic",
-                "source": source_file, "source_line": _line_number(text, match.start()),
+                "source": source_file, "source_line": line_at(match.start()),
                 "storage": match.group("store"), "key": match.group("key"),
             })
 
@@ -370,6 +386,7 @@ class JSDeepAnalyzer:
 
     def asset_references(self, text: str, base_url: str, *, source_file: str = "unknown") -> List[Dict[str, Any]]:
         refs: List[Dict[str, Any]] = []
+        line_at = _line_number_lookup(text)
         seen: set[Tuple[str, str]] = set()
         values = self._constant_values(text)
 
@@ -394,7 +411,7 @@ class JSDeepAnalyzer:
             seen.add(key)
             refs.append({
                 "url": url, "asset_type": kind, "source_file": source_file,
-                "source_line": _line_number(text, match.start()),
+                "source_line": line_at(match.start()),
                 "context": _snippet(text, match.start(), match.end(), self.redactor),
             })
 
@@ -414,6 +431,7 @@ class JSDeepAnalyzer:
 
     def html_references(self, html: str, base_url: str, *, source_file: str = "document") -> List[Dict[str, Any]]:
         refs: List[Dict[str, Any]] = []
+        line_at = _line_number_lookup(html)
         attr_re = re.compile(
             r"<script\b[^>]*\bsrc\s*=\s*(['\"])([^'\"]+)\1[^>]*>|"
             r"<link\b[^>]*\brel\s*=\s*(['\"])([^'\"]+)\3[^>]*\bhref\s*=\s*(['\"])([^'\"]+)\5[^>]*>|"
@@ -443,7 +461,7 @@ class JSDeepAnalyzer:
                 continue
             refs.append({
                 "url": url, "asset_type": kind, "source_file": source_file,
-                "source_line": _line_number(html, match.start()),
+                "source_line": line_at(match.start()),
                 "context": _snippet(html, match.start(), match.end(), self.redactor),
             })
         # Next's build/data manifests and common framework assets are often
@@ -451,7 +469,7 @@ class JSDeepAnalyzer:
         for match in re.finditer(r"(['\"])(/_(?:next|nuxt)/[^'\"]+|/_astro/[^'\"]+|/assets/[^'\"]+\.js)['\"]", html or "", re.IGNORECASE):
             url = urllib.parse.urljoin(base_url, match.group(2))
             refs.append({"url": url, "asset_type": "framework_asset", "source_file": source_file,
-                         "source_line": _line_number(html, match.start()),
+                         "source_line": line_at(match.start()),
                          "context": _snippet(html, match.start(), match.end(), self.redactor)})
         return refs
 
@@ -558,6 +576,7 @@ class JSDeepAnalyzer:
                           source_map: Optional[str] = None, framework: Optional[str] = None,
                           parent_asset: Optional[str] = None) -> List[EndpointRecord]:
         endpoints: List[EndpointRecord] = []
+        line_at = _line_number_lookup(text)
         variables = self._constant_values(text)
         object_configs = self._object_configs(text)
 
@@ -580,7 +599,7 @@ class JSDeepAnalyzer:
             method = method_match.group(2) if method_match else "GET"
             headers, auth_source, auth_required = self._header_info(config, text, match.start())
             self._append_endpoint(endpoints, url=url, method=method, source_file=source_file, source_url=source_url,
-                                  source_map=source_map, line=_line_number(text, match.start()), request_type="REST",
+                                  source_map=source_map, line=line_at(match.start()), request_type="REST",
                                   headers=headers, body_shape=self._body_shape(config), auth_source=auth_source,
                                   auth_required=auth_required if headers else None, framework=framework,
                                   parent_asset=parent_asset, context=text[match.start(): min(len(text), match.start() + 1800)], confidence=.92)
@@ -592,7 +611,7 @@ class JSDeepAnalyzer:
             tail = text[match.start(): min(len(text), match.start() + 1800)]
             headers, auth_source, auth_required = self._header_info(tail, text, match.start())
             self._append_endpoint(endpoints, url=url, method=match.group("method"), source_file=source_file,
-                                  source_url=source_url, source_map=source_map, line=_line_number(text, match.start()),
+                                  source_url=source_url, source_map=source_map, line=line_at(match.start()),
                                   request_type="REST", headers=headers, body_shape=self._body_shape(tail),
                                   auth_source=auth_source, auth_required=auth_required if headers else None,
                                   framework=framework, parent_asset=parent_asset, context=tail, confidence=.84)
@@ -605,7 +624,7 @@ class JSDeepAnalyzer:
             headers, auth_source, auth_required = self._header_info(config, text, match.start())
             self._append_endpoint(endpoints, url=url, method=method_match.group(2) if method_match else "GET",
                                   source_file=source_file, source_url=source_url, source_map=source_map,
-                                  line=_line_number(text, match.start()), request_type="REST", headers=headers,
+                                  line=line_at(match.start()), request_type="REST", headers=headers,
                                   body_shape=self._body_shape(config), auth_source=auth_source,
                                   auth_required=auth_required if headers else None, framework=framework,
                                   parent_asset=parent_asset, context=config, confidence=.8)
@@ -614,7 +633,7 @@ class JSDeepAnalyzer:
         for match in re.finditer(r"\.open\s*\(\s*(['\"])([A-Za-z]+)\1\s*,\s*([^,)]+)", text or "", re.IGNORECASE):
             url = self._resolve_url(match.group(3), source_url, variables)
             self._append_endpoint(endpoints, url=url, method=match.group(2), source_file=source_file,
-                                  source_url=source_url, source_map=source_map, line=_line_number(text, match.start()),
+                                  source_url=source_url, source_map=source_map, line=line_at(match.start()),
                                   request_type="REST", framework=framework, parent_asset=parent_asset,
                                   context=match.group(0), confidence=.82)
 
@@ -622,7 +641,7 @@ class JSDeepAnalyzer:
             url = self._resolve_url(match.group(1), source_url, variables)
             if url and urllib.parse.urlsplit(url).scheme in {"ws", "wss"}:
                 self._append_endpoint(endpoints, url=url, method="CONNECT", source_file=source_file,
-                                      source_url=source_url, source_map=source_map, line=_line_number(text, match.start()),
+                                      source_url=source_url, source_map=source_map, line=line_at(match.start()),
                                       request_type="WebSocket", framework=framework, parent_asset=parent_asset,
                                       context=match.group(0), confidence=.94)
         # Socket.IO uses an HTTP(S) origin during the initial handshake but is
@@ -631,13 +650,13 @@ class JSDeepAnalyzer:
         for match in re.finditer(r"\b(?:io|socket\.io)\s*\(\s*([^,)]+)", text or "", re.IGNORECASE):
             url = self._resolve_url(match.group(1), source_url, variables)
             self._append_endpoint(endpoints, url=url, method="CONNECT", source_file=source_file,
-                                  source_url=source_url, source_map=source_map, line=_line_number(text, match.start()),
+                                  source_url=source_url, source_map=source_map, line=line_at(match.start()),
                                   request_type="Socket.IO", framework=framework, parent_asset=parent_asset,
                                   context=match.group(0), confidence=.86)
         for match in re.finditer(r"\b(?:new\s+)?EventSource\s*\(\s*([^,)]+)", text or "", re.IGNORECASE):
             url = self._resolve_url(match.group(1), source_url, variables)
             self._append_endpoint(endpoints, url=url, method="GET", source_file=source_file,
-                                  source_url=source_url, source_map=source_map, line=_line_number(text, match.start()),
+                                  source_url=source_url, source_map=source_map, line=line_at(match.start()),
                                   request_type="SSE", framework=framework, parent_asset=parent_asset,
                                   context=match.group(0), confidence=.9)
         for match in re.finditer(r"\b(?:uri|url|endpoint|httpEndpoint|uriTemplate)\s*:\s*(['\"])([^'\"]+)\1", text or "", re.IGNORECASE):
@@ -648,7 +667,7 @@ class JSDeepAnalyzer:
                 request_type = "REST"
             self._append_endpoint(endpoints, url=url, method="POST" if request_type == "GraphQL" else "GET",
                                   source_file=source_file, source_url=source_url, source_map=source_map,
-                                  line=_line_number(text, match.start()), request_type=request_type,
+                                  line=line_at(match.start()), request_type=request_type,
                                   framework=framework, parent_asset=parent_asset, context=match.group(0), confidence=.75)
 
         # Add relevant literal routes not attached to a recognized call.  This
@@ -668,13 +687,14 @@ class JSDeepAnalyzer:
             endpoint_type = "NextData" if parsed.path.startswith("/_next/data/") else ("GraphQL" if "graphql" in lowered else "REST")
             self._append_endpoint(endpoints, url=literal_url, method="GET",
                                   source_file=source_file, source_url=source_url, source_map=source_map,
-                                  line=_line_number(text, match.start()), request_type=endpoint_type,
+                                  line=line_at(match.start()), request_type=endpoint_type,
                                   framework=framework, parent_asset=parent_asset,
                                   context=match.group(0), confidence=.58)
         return endpoints
 
     def _credential_observations(self, text: str, source_file: str, source_url: str,
                                  source_map: Optional[str] = None) -> List[Dict[str, Any]]:
+        line_at = _line_number_lookup(text)
         values = self._constant_values(text)
         observations: List[Dict[str, Any]] = []
         seen: set[Tuple[str, int]] = set()
@@ -682,7 +702,7 @@ class JSDeepAnalyzer:
         for match in re.finditer(rf"\b(?:const|let|var)\s+({_IDENTIFIER})\s*=\s*([^;\n]+)", text or ""):
             value = self._static_value(match.group(2), values)
             if value:
-                assignment_names[value] = (match.group(1), _line_number(text, match.start()))
+                assignment_names[value] = (match.group(1), line_at(match.start()))
         for match in _STRING_RE.finditer(text or ""):
             raw = self._decode_static(match.group("value"))
             if len(raw) < 6:
@@ -701,13 +721,13 @@ class JSDeepAnalyzer:
             if not is_candidate:
                 continue
             classified = self.redactor.safe_credential(raw, context=context, variable_name=variable_name)
-            key = (classified["sha256"], _line_number(text, match.start()))
+            key = (classified["sha256"], line_at(match.start()))
             if key in seen:
                 continue
             seen.add(key)
             classified.update({
                 "source_url": source_url, "source_file": source_file,
-                "source_line": assignment_line or _line_number(text, match.start()),
+                "source_line": assignment_line or line_at(match.start()),
                 "variable_name": variable_name, "source_map": source_map,
                 "context": self.redactor.redact_text(context)[:600],
             })
@@ -717,11 +737,11 @@ class JSDeepAnalyzer:
         for match in re.finditer(r"\bBearer\s+([A-Za-z0-9._~+/=-]{16,})", text or "", re.IGNORECASE):
             raw = "Bearer " + match.group(1)
             classified = self.redactor.safe_credential(raw, context=text[max(0, match.start() - 120):match.end() + 120])
-            key = (classified["sha256"], _line_number(text, match.start()))
+            key = (classified["sha256"], line_at(match.start()))
             if key not in seen:
                 seen.add(key)
                 classified.update({"source_url": source_url, "source_file": source_file,
-                                   "source_line": _line_number(text, match.start()),
+                                   "source_line": line_at(match.start()),
                                    "context": self.redactor.redact_text(text[max(0, match.start() - 120):match.end() + 120])[:600],
                                    "source_map": source_map})
                 observations.append(classified)

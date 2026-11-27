@@ -210,6 +210,16 @@ def test_firebase_config_is_one_public_project_and_api_key_is_not_a_secret_findi
     assert correlated["firebase"][0].key_fingerprint == key_record.sha256
 
 
+def test_baas_fast_path_keeps_indirect_config_pairs():
+    source = {"source_file": "bundle.js", "source_url": TARGET,
+              "text": 'const URL="https://demo.supabase.co";const KEY="demo-key";'
+                      'const cfg={url:URL,key:KEY};const fb={apiKey:"public",projectId:"demo"};'}
+    result = BaaSCorrelationEngine().correlate([source])
+    assert any(project.project_ref == "demo" and project._raw_key == "demo-key"
+               for project in result["supabase"])
+    assert any(project.project_ref == "demo" for project in result["firebase"])
+
+
 def test_runtime_config_is_reprocessed_for_exact_baas_pairing_and_public_ids_remain_visible():
     config = json.dumps({
         "SUPABASE_URL": "https://runtime-a.supabase.co",

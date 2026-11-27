@@ -37,7 +37,7 @@ from redteam_agent.core.config import (
 from redteam_agent.core.db_hunter import probe_db_port
 from redteam_agent.core.fp_killer import kill_pass
 from redteam_agent.core.vrt_triage import VRTTriageEngine
-from redteam_agent.core.engagement import EngagementError, EngagementProfile, engagement_required
+from redteam_agent.core.engagement import EngagementProfile, HARD_PROHIBITED
 from redteam_agent.core.evidence_bundle import EvidenceBundleBuilder
 from redteam_agent.core.export_analyzer import analyze_export
 
@@ -305,13 +305,11 @@ async def start_scan(req: StartScanRequest):
         "vulnerability_classes": list(dict.fromkeys(req.vulnerability_classes)),
     }
     engagement_profile = None
-    if req.engagement:
+    if req.engagement is not None:
         try:
             engagement_profile = EngagementProfile.from_mapping(req.engagement)
         except (ValueError, TypeError) as exc:
             raise HTTPException(status_code=400, detail=f"invalid engagement: {exc}") from exc
-    if offensive and engagement_profile is None:
-        raise HTTPException(status_code=400, detail="offensive scan requires --engagement-file")
     try:
         task = task_manager.create_task(req.target.strip(), preset=req.preset, scope_in=req.scope_include,
         scope_exclude=req.scope_exclude, exact_urls=req.exact_urls, allow_private=req.allow_private,
@@ -428,15 +426,14 @@ async def test_interactive_payload(req: InteractiveExploitRequest):
     """
     if not req.technique.strip():
         raise HTTPException(status_code=400, detail="An exact target-specific technique is required.")
-    if req.engagement is None:
-        raise HTTPException(status_code=400, detail="offensive scan requires --engagement-file")
-    try:
-        engagement_profile = EngagementProfile.from_mapping(req.engagement)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail=f"invalid engagement: {exc}") from exc
-    engagement_profile.assert_active()
-    engagement_profile.assert_scope(req.url)
-    engagement_profile.assert_techniques([req.technique])
+    if req.technique.strip().lower().replace("_", "-") in HARD_PROHIBITED:
+        raise HTTPException(status_code=400, detail=f"technique {req.technique} is prohibited")
+    if req.engagement is not None:
+        try:
+            engagement_profile = EngagementProfile.from_mapping(req.engagement)
+            engagement_profile.validate_session(req.url, techniques=[req.technique])
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=f"invalid engagement: {exc}") from exc
     full_url = req.url
     if req.param and req.payload:
         import urllib.parse
@@ -453,7 +450,7 @@ async def test_interactive_payload(req: InteractiveExploitRequest):
         scope, traffic = task.scope_manager, task.traffic_controller
     else:
         try:
-            scope = ScopeManager.from_target(req.url, allow_private=req.allow_private)
+            scope = ScopeManager.from_target(req.url, include=[req.url], allow_private=req.allow_private)
         except (ValueError, URLPolicyError) as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         traffic = TrafficController("NORMAL")
@@ -467,17 +464,14 @@ async def test_interactive_payload(req: InteractiveExploitRequest):
 @app.post("/api/cloud/audit")
 async def audit_cloud_target(req: BaasAuditRequest):
     """Directly tests Supabase RLS or Firebase open rules."""
-    if req.engagement is None:
-        raise HTTPException(status_code=400, detail="offensive scan requires --engagement-file")
+    if req.engagement is not None:
+        try:
+            engagement_profile = EngagementProfile.from_mapping(req.engagement)
+            engagement_profile.validate_session(req.url, techniques=["cloud-baas"])
+        except (ValueError, TypeError) as exc:
+            raise HTTPException(status_code=400, detail=f"invalid engagement: {exc}") from exc
     try:
-        engagement_profile = EngagementProfile.from_mapping(req.engagement)
-    except (ValueError, TypeError) as exc:
-        raise HTTPException(status_code=400, detail=f"invalid engagement: {exc}") from exc
-    engagement_profile.assert_active()
-    engagement_profile.assert_scope(req.url)
-    engagement_profile.assert_techniques(["cloud-baas"])
-    try:
-        direct_scope = ScopeManager.from_target(req.url, allow_private=req.allow_private)
+        direct_scope = ScopeManager.from_target(req.url, include=[req.url], allow_private=req.allow_private)
     except (ValueError, URLPolicyError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     if req.platform.lower() == "supabase":

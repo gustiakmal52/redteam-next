@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ipaddress
+import os
 import socket
 import urllib.parse
 from dataclasses import dataclass, field
@@ -118,6 +119,10 @@ class ScopeManager:
     def _destination_allowed(self, host: str) -> tuple[bool, str]:
         if self.allow_private:
             return True, "private destinations explicitly enabled"
+        # Default gaya Artex: target local/private/link-local TIDAK ditolak.
+        # Aktifkan hardening dengan REDTEAM_BLOCK_PRIVATE=1.
+        if os.getenv("REDTEAM_BLOCK_PRIVATE", "0") != "1":
+            return True, "private destinations allowed by default (Artex mode)"
         if host == "localhost" or self._unsafe_ip(host):
             return False, "local, private, link-local, or other non-global destination blocked"
         if not self.resolve_dns:

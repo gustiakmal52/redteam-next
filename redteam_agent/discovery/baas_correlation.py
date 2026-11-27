@@ -6,7 +6,7 @@ import re
 import urllib.parse
 from typing import Any, Dict, Iterable, List, Optional
 
-from redteam_agent.discovery.js_deep import JSDeepAnalyzer, _line_number, _read_balanced, _read_expression
+from redteam_agent.discovery.js_deep import JSDeepAnalyzer, _line_number_lookup, _read_balanced, _read_expression
 from redteam_agent.discovery.models import BaaSProject, CredentialRecord, EndpointRecord
 from redteam_agent.discovery.redaction import SecretRedactor, decode_jwt_claims
 
@@ -30,6 +30,13 @@ class BaaSCorrelationEngine:
         r"['\"]?\s*:\s*([^,}\n]+)"
     )
     GENERIC_URL_RE = re.compile(r"https?://[^'\"`\s<>]{3,300}", re.IGNORECASE)
+    CONFIG_FIELD_RE = re.compile(
+        r"['\"]?(?P<name>[A-Za-z_$][\w$.-]*)['\"]?\s*:\s*(?P<expr>[^,}\n]+)"
+    )
+    CONFIG_ASSIGNMENT_RE = re.compile(
+        r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*(?P<expr>[^;\n]+)"
+    )
+    OBJECT_START_RE = re.compile(r"\{")
     CLOUD_MARKERS = {
         "AWS Cognito": ("cognito-idp.", "cognitoidentity", "userpoolid", "identitypoolid", "amazoncognito.com"),
         "Auth0": ("auth0.com", "auth0client", "auth0-spa-js", "auth0"),
@@ -139,8 +146,10 @@ class BaaSCorrelationEngine:
 
     def _supabase_call_projects(self, text: str, source: Dict[str, Any], credentials: List[CredentialRecord]) -> List[BaaSProject]:
         projects: List[BaaSProject] = []
-        variables = self.js_helper._constant_values(text)
+        line_at = _line_number_lookup(text)
+        variables: Optional[Dict[str, str]] = None
         for match in re.finditer(r"\bcreateClient\s*\(", text or "", re.IGNORECASE):
+            variables = variables if variables is not None else self.js_helper._constant_values(text)
             first, cursor = _read_expression(text, match.end())
             if cursor >= len(text) or text[cursor] != ",":
                 continue
@@ -159,7 +168,7 @@ class BaaSCorrelationEngine:
                 key_source=source.get("source_file"), services=self._services_from_text(text, "Supabase"),
                 public_identifiers={"project_ref": self._project_ref(url, claims)} if self._project_ref(url, claims) else {},
                 confidence=confidence, _raw_key=key if key else None,
-                evidence=[{"source_file": source.get("source_file"), "source_line": _line_number(text, match.start()),
+                evidence=[{"source_file": source.get("source_file"), "source_line": line_at(match.start()),
                            "relationship": "createClient(url, key)",
                            "source_map": source.get("source_map")}],
             )
@@ -181,13 +190,9 @@ class BaaSCorrelationEngine:
         explicitly suffixed sibling assignments; unrelated keys in the same
         bundle are never tried against every observed project.
         """
-        field_re = re.compile(
-            r"['\"]?(?P<name>[A-Za-z_$][\w$.-]*)['\"]?\s*:\s*(?P<expr>[^,}\n]+)"
-        )
-        assignments_re = re.compile(
-            r"\b(?:const|let|var)\s+(?P<name>[A-Za-z_$][\w$]*)\s*=\s*(?P<expr>[^;\n]+)"
-        )
-        variables = self.js_helper._constant_values(text)
+        field_re = self.CONFIG_FIELD_RE
+        assignments_re = self.CONFIG_ASSIGNMENT_RE
+        line_at = _line_number_lookup(text)
         structures: List[tuple[str, str, str, int]] = []
 
         def static_value(expression: str) -> Optional[str]:
@@ -201,6 +206,13 @@ class BaaSCorrelationEngine:
             lowered = re.sub(r"[^a-z0-9]", "", name.lower())
             return lowered in {"key", "apikey", "anonkey", "publishablekey", "servicerolekey", "servicekey"} \
                 or ("supabase" in lowered and any(marker in lowered for marker in ("key", "token", "secret")))
+
+        if not any(key_field(match.group("name")) for match in field_re.finditer(text)) and not any(
+            "supabase" in match.group("name").lower() and key_field(match.group("name"))
+            for match in assignments_re.finditer(text)
+        ):
+            return []
+        variables = self.js_helper._constant_values(text)
 
         def add_pair(url_name: str, url: str, key_name: str, key: str, line: int) -> BaaSProject:
             if not urllib.parse.urlsplit(url).scheme:
@@ -230,15 +242,19 @@ class BaaSCorrelationEngine:
         # Object/config boundary pairing is the primary path.  For multiple
         # projects in one object, only an identical suffix (for example A)
         # makes a pair deterministic; otherwise the object is left unpaired.
-        for start in (match.start() for match in re.finditer(r"\{", text or "")):
+        processed_until = -1
+        for start in (match.start() for match in self.OBJECT_START_RE.finditer(text or "")):
+            if start < processed_until:
+                continue
             block, end = _read_balanced(text, start)
             if not block or end <= start:
                 continue
+            processed_until = max(processed_until, end)
             fields: List[tuple[str, str, int]] = []
             for match in field_re.finditer(block):
                 value = static_value(match.group("expr"))
                 if value:
-                    fields.append((match.group("name"), value, _line_number(text, start + match.start())))
+                    fields.append((match.group("name"), value, line_at(start + match.start())))
             urls = [(name, value, line) for name, value, line in fields if "supabase.co" in value.lower()]
             keys = [(name, value, line) for name, value, line in fields if key_field(name)]
             if not urls or not keys:
@@ -264,7 +280,7 @@ class BaaSCorrelationEngine:
         for match in assignments_re.finditer(text or ""):
             value = static_value(match.group("expr"))
             if value:
-                assignments.append((match.group("name"), value, _line_number(text, match.start()), match.start()))
+                assignments.append((match.group("name"), value, line_at(match.start()), match.start()))
         url_assignments = [item for item in assignments if "supabase.co" in item[1].lower()]
         key_assignments = [item for item in assignments if key_field(item[0])]
         for url_item in url_assignments:
@@ -281,6 +297,7 @@ class BaaSCorrelationEngine:
     def _supabase_fallbacks(self, text: str, source: Dict[str, Any], credentials: List[CredentialRecord], existing_urls: set[str]) -> List[BaaSProject]:
         """Record unpaired Supabase URLs, never inventing a key pairing."""
         projects: List[BaaSProject] = []
+        line_at = _line_number_lookup(text)
         for match in self.SUPABASE_URL_RE.finditer(text or ""):
             url = match.group(0).rstrip("/")
             if url in existing_urls:
@@ -291,13 +308,14 @@ class BaaSCorrelationEngine:
                 key_type=None, key_source=None, services=self._services_from_text(nearby, "Supabase"),
                 public_identifiers={"project_ref": self._project_ref(url)} if self._project_ref(url) else {},
                 confidence=.62, evidence=[{"source_file": source.get("source_file"),
-                                           "source_line": _line_number(text, match.start()),
+                                           "source_line": line_at(match.start()),
                                            "relationship": "Supabase URL observed without a constructor key"}],
             ))
         return projects
 
     def _firebase_projects(self, text: str, source: Dict[str, Any], credentials: List[CredentialRecord]) -> List[BaaSProject]:
         projects: List[BaaSProject] = []
+        line_at = _line_number_lookup(text)
         # Prefer the object assigned to firebaseConfig/config; its fields form
         # one project rather than seven unrelated observations.
         starts = list(re.finditer(r"\b(?:firebaseConfig|firebase_config|firebaseOptions|config)\s*=\s*\{", text or "", re.IGNORECASE))
@@ -306,23 +324,34 @@ class BaaSCorrelationEngine:
         # unrelated request objects are not treated as projects.
         seen_starts = {match.end() - 1 for match in starts}
         structural_starts: List[int] = []
-        for object_start in (match.start() for match in re.finditer(r"\{", text or "")):
-            if object_start in seen_starts:
+        processed_until = -1
+        for object_start in (match.start() for match in self.OBJECT_START_RE.finditer(text or "")):
+            if object_start in seen_starts or object_start < processed_until:
                 continue
-            block, _ = _read_balanced(text, object_start)
+            block, end = _read_balanced(text, object_start)
             if re.search(r"['\"]?apiKey['\"]?\s*:", block, re.IGNORECASE) and re.search(
                 r"['\"]?(?:projectId|authDomain|databaseURL|storageBucket)['\"]?\s*:", block, re.IGNORECASE
             ):
                 structural_starts.append(object_start)
                 seen_starts.add(object_start)
+                if end > object_start:
+                    processed_until = max(processed_until, end)
+        variables: Optional[Dict[str, str]] = None
+
+        def resolve_field(value: str) -> str:
+            nonlocal variables
+            resolved = self.js_helper._static_value(value, {})
+            if resolved is None or "${" in value:
+                variables = variables if variables is not None else self.js_helper._constant_values(text)
+                resolved = self.js_helper._static_value(value, variables)
+            return resolved or value.strip("'\"` ")
+
         for start in starts:
             object_start = start.end() - 1
             block, _ = _read_balanced(text, object_start)
             fields: Dict[str, str] = {}
             for match in self.FIREBASE_FIELD_RE.finditer(block):
-                value = match.group(2).strip()
-                resolved = self.js_helper._static_value(value, self.js_helper._constant_values(text))
-                fields[match.group(1)] = resolved or value.strip("'\"` ")
+                fields[match.group(1)] = resolve_field(match.group(2).strip())
             if not ({"apiKey", "projectId"} & set(fields)):
                 continue
             api_key = fields.get("apiKey")
@@ -335,7 +364,7 @@ class BaaSCorrelationEngine:
                 public_identifiers={key: fields[key] for key in ("projectId", "authDomain", "databaseURL", "storageBucket",
                                                                   "messagingSenderId", "appId") if fields.get(key)},
                 confidence=.92 if fields.get("projectId") and api_key else .78,
-                evidence=[{"source_file": source.get("source_file"), "source_line": _line_number(text, start.start()),
+                evidence=[{"source_file": source.get("source_file"), "source_line": line_at(start.start()),
                            "relationship": "Firebase config object", "fields": sorted(fields)}],
             )
             project.auth["auth_domain"] = fields.get("authDomain")
@@ -349,9 +378,7 @@ class BaaSCorrelationEngine:
                 block, _ = _read_balanced(text, object_start)
                 fields: Dict[str, str] = {}
                 for match in self.FIREBASE_FIELD_RE.finditer(block):
-                    value = match.group(2).strip()
-                    resolved = self.js_helper._static_value(value, self.js_helper._constant_values(text))
-                    fields[match.group(1)] = resolved or value.strip("'\"` ")
+                    fields[match.group(1)] = resolve_field(match.group(2).strip())
                 api_key = fields.get("apiKey")
                 if not ({"apiKey", "projectId"} & set(fields)):
                     continue
@@ -363,7 +390,7 @@ class BaaSCorrelationEngine:
                     public_identifiers={key: fields[key] for key in ("projectId", "authDomain", "databaseURL", "storageBucket",
                                                                       "messagingSenderId", "appId") if fields.get(key)},
                     confidence=.92 if fields.get("projectId") and api_key else .78,
-                    evidence=[{"source_file": source.get("source_file"), "source_line": _line_number(text, object_start),
+                    evidence=[{"source_file": source.get("source_file"), "source_line": line_at(object_start),
                                "relationship": "Firebase config object", "fields": sorted(fields)}],
                 )
                 project.auth["auth_domain"] = fields.get("authDomain")
@@ -378,7 +405,7 @@ class BaaSCorrelationEngine:
                 projects.append(BaaSProject(provider="Firebase", url=url, project_ref=(urllib.parse.urlsplit(url).hostname or "").split(".", 1)[0],
                                             public_identifiers={"project_ref": (urllib.parse.urlsplit(url).hostname or "").split(".", 1)[0]},
                                             confidence=.6, evidence=[{"source_file": source.get("source_file"),
-                                                                       "source_line": _line_number(text, match.start()),
+                                                                       "source_line": line_at(match.start()),
                                                                        "relationship": "Firebase database URL observed"}]))
         return projects
 
@@ -418,7 +445,10 @@ class BaaSCorrelationEngine:
         # entire bundle would pair the first clientId in an application with a
         # later, unrelated Auth0/Cognito object—the same class of error this
         # engine avoids for Supabase URL/key pairing.
-        for start in (match.start() for match in re.finditer(r"\{", text or "")):
+        processed_until = -1
+        for start in (match.start() for match in self.OBJECT_START_RE.finditer(text or "")):
+            if start < processed_until:
+                continue
             block, end = _read_balanced(text, start)
             if not block or end <= start:
                 continue
@@ -426,6 +456,7 @@ class BaaSCorrelationEngine:
             boundary = prefix + block
             if any(marker.lower() in boundary.lower() for marker in self.CLOUD_MARKERS.get(provider, ())):
                 extract(block)
+                processed_until = max(processed_until, end)
 
         # Some SDKs expose flat constants rather than an object.  Keep the
         # fallback local to the marker occurrence; it is not a bundle-wide
@@ -446,6 +477,7 @@ class BaaSCorrelationEngine:
         provider-specific, in-scope workflow.
         """
         lowered = (text or "").lower()
+        line_at = _line_number_lookup(text)
         urls = [match.group(0).rstrip(".,)") for match in self.GENERIC_URL_RE.finditer(text or "")]
         projects: List[BaaSProject] = []
         for provider, markers in self.CLOUD_MARKERS.items():
@@ -475,7 +507,7 @@ class BaaSCorrelationEngine:
             if not project_ref and url:
                 project_ref = urllib.parse.urlsplit(url).hostname
             if not project_ref:
-                project_ref = f"{source.get('source_file') or 'source'}:{_line_number(text, text.lower().find(matched[0].lower()))}"
+                project_ref = f"{source.get('source_file') or 'source'}:{line_at(text.lower().find(matched[0].lower()))}"
             if not url:
                 candidate_url = next((value for value in identifiers.values()
                                       if value.startswith(("http://", "https://"))), None)
@@ -495,7 +527,7 @@ class BaaSCorrelationEngine:
                 key_type="public-config", services=services, confidence=.76,
                 public_identifiers=identifiers,
                 evidence=[{"source_file": source.get("source_file"),
-                           "source_line": _line_number(text, text.lower().find(matched[0].lower())),
+                           "source_line": line_at(text.lower().find(matched[0].lower())),
                            "relationship": "provider configuration markers", "markers": matched,
                            "public_identifier_fields": sorted(identifiers),
                            "values_retained": False}],
@@ -513,11 +545,16 @@ class BaaSCorrelationEngine:
             text = str(source.get("text") or source.get("source_code") or "")
             if not text:
                 continue
-            supabase = self._supabase_call_projects(text, source, credentials)
-            supabase.extend(self._supabase_config_projects(text, source, credentials))
-            urls = {project.url for project in supabase if project.url}
-            supabase.extend(self._supabase_fallbacks(text, source, credentials, urls))
-            firebase = self._firebase_projects(text, source, credentials)
+            lowered = text.lower()
+            supabase: List[BaaSProject] = []
+            if "supabase" in lowered:
+                supabase = self._supabase_call_projects(text, source, credentials)
+                supabase.extend(self._supabase_config_projects(text, source, credentials))
+                urls = {project.url for project in supabase if project.url}
+                supabase.extend(self._supabase_fallbacks(text, source, credentials, urls))
+            firebase = self._firebase_projects(text, source, credentials) if (
+                "firebase" in lowered or any(field.lower() in lowered for field in self.CONFIG_FIELDS)
+            ) else []
             generic = self._generic_cloud_projects(text, source)
             for project in supabase + firebase + generic:
                 projects.append(project)

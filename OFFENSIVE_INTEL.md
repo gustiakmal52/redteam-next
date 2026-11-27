@@ -146,7 +146,7 @@ Results JSON sekarang includes:
       "intelligence_enriched_hypotheses": 15,
       "intelligence_sources": [
         "CISA KEV",
-        "ExploitDB", 
+        "ExploitDB",
         "HackerOne",
         "Bugcrowd",
         "Real Bug Bounty Reports"
@@ -237,6 +237,51 @@ Intelligence database berisi exploit patterns dari:
 
 ---
 
-**Last Updated**: 2026-09-07  
-**Intelligence Patterns**: 32+  
-**Coverage**: IDOR, SQLi, XSS, SSRF, GraphQL, Auth Bypass, File Upload, Race Conditions
+## Snapshot Intel Segar — 17 Oktober 2026
+
+Seksi baru `FRESH_INTEL_2026_10_PATTERNS` di `offensive_intel_db.py`: **19 entri**
+hasil refresh intel hari ini, semua dari sumber primer (bukan ringkasan pihak
+ketiga). Semua entri = hipotesis + gerbang versi, bukan klaim exploitable.
+
+### Provenance
+
+| Sumber | Bukti |
+|---|---|
+| CISA KEV catalog **2026.10.16** (1.748 entri) | run intel `20261017T122621Z`, manifest sha256 `f3bda8de…422fe` di `~/tooling/manual-web-hunting-intel/runs/` |
+| CKAN CVE-2026-42032 | GitHub Advisory [GHSA-cg4x-64p3-x59h](https://github.com/advisories/GHSA-cg4x-64p3-x59h) — authz bypass `datastore_search_sql`, tanpa auth, CWE-863, patched 2.10.10/2.11.5, sqlsearch off by default |
+| CKAN CVE-2025-54384 | [GHSA-2r4h-8jxv-w2j8](https://osv.dev/vulnerability/GHSA-2r4h-8jxv-w2j8) — stored XSS via `helpers.markdown_extract()`, patched 2.10.9/2.11.4 |
+| CKAN CVE-2026-42031 / 41255 / 41132 | NVD + [CKAN patch release blog 29 Apr 2026](https://ckan.org/blog/ckan-2115-21010-released-security-bug-fix-patch) |
+| KEV 14–16 Okt 2026 | [alert CISA 14 Okt](https://www.cisa.gov/news-events/alerts/2026/10/14/cisa-adds-four-known-exploited-vulnerabilities-catalog) (4 CVE: PAN-OS, Cisco SEG, AhsayCBS ×2) + 16 Okt (BeyondTrust, Fortinet) |
+
+### Isi seksi (19 entri)
+
+- **CKAN ×5** (CVE-2026-42032 authz bypass, 42031 SQLi, 41255 CSRF-exemption
+  priming, 2025-54384 stored XSS markdown_extract, 41132 SMTP TLS) —
+  **prioritas Tangsel BBB s.d. 30 Okt**; 42031 sudah digarap di
+  `evidence/data.tangerangselatankota.go.id-ckan-cve-2026-42031`, sisanya
+  kandidat hipotesis baru yang butuh gate versi dulu.
+- **KEV Okt–Sep 2026 ×14** (BeyondTrust 102764, Fortinet 5-61624, Atlassian
+  21589, Ahsay 105133/105134 chain, Cisco SEG 76519+76461, PAN-OS 0322, Ivanti
+  ICS 104935, Zammad 102489/102490, Magento 75650 SSTI + 71362 authz,
+  WordPress 87902 RFI, SharePoint 65660, Starlette 48710 smuggling, Strapi
+  2023-22894) — kelas perimeter/web-app yang sering muncul di scope VDP/gov.
+
+### Aturan pakai (tetap berlaku)
+
+1. Entry = **hipotesis**. Gate versi + prasyarat konfigurasi wajib cocok
+   advisori vendor sebelum satu request exploit dikirim.
+2. Tidak ada payload karangan di seksi ini untuk produk perimeter — langkah
+   teknis berhenti di fingerprint + gate versi sampai advisori teknis
+   terbaca dari sumber primer.
+3. Klaim tetap lewat tuple `PRODUCT-CONTROL -> STATE-CHANGE ->
+   POST-CHANGE-CALL -> EFFECT`.
+
+Refresh berikutnya: jalankan lagi
+`python3 ~/.agents/skills/manual-web-hunting/scripts/refresh_intel.py` lalu
+tambah/segarkan entri dari KEV JSON run terbaru.
+
+---
+
+**Last Updated**: 2026-10-17
+**Intelligence Patterns**: 32+ (dari snapshot Sep) + 19 fresh Okt = **51+**
+**Coverage**: IDOR, SQLi, XSS, SSRF, GraphQL, Auth Bypass, File Upload, Race Conditions, Modern Surface (LLM/OAuth/cache/postMessage/smuggling/ORM), CKAN bundle, KEV Okt 2026

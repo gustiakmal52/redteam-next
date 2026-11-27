@@ -15,9 +15,13 @@
       }
     }
   },
-  "controlled_callback_url": "https://REPLACE_WITH_YOUR_OAST_HOST.example/callback",
+  "controlled_callback_url": "https://REPLACE_WITH_YOUR_OAST_HOST.example/callback/{token}",
+  "controlled_callback_token": "rt-REPLACE_WITH_RANDOM_SESSION_TOKEN",
+  "deterministic_response_marker": "REPLACE_WITH_EXACT_TEXT_SERVED_BY_CALLBACK",
   "controlled_callback_evidence": {
     "observed": false,
-    "source": "operator_callback"
+    "source": "operator_callback",
+    "request_id": "",
+    "request_url": ""
   }
 }

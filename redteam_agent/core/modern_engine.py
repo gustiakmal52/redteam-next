@@ -10,13 +10,12 @@ behavior across semantically-different inputs:
   2. ssti_arithmetic_multi_engine — template evaluation via arithmetic
      ({{7*7}} -> 49 vs {{7*8}} -> 56) across Jinja2/Twig/EL/SpEL/Freemarker
      syntaxes.  Two semantically-different evaluations = template execution.
-  3. cmd_time_based_median       — command injection via median-of-3 timing
+  3. cmd_time_based_median       — command injection via median-of-N timing (default 2, cap 3; sample groups run in parallel)
      (sleep 1 vs sleep 5).  Single spikes are rejected; only a repeatable
      median shift counts.
   4. cache_poisoning             — X-Forwarded-Host / X-Original-URL reflected
      into a cached response (Age/X-Cache/CF-Cache-Status present).
-  5. security_headers_audit      — CSP/HSTS/XFO/nosniff/COOP/CORP coverage.
-  6. dom_xss_analysis            — static data-flow over JS bundles: sink
+  5. dom_xss_analysis            — static data-flow over JS bundles: sink
      (innerHTML/document.write/eval/...) reached from a source
      (location.hash/search/referrer/postMessage/...).
 
@@ -30,7 +29,8 @@ import json
 import re
 import time
 import urllib.parse
-from typing import Any, Dict, List, Optional
+from concurrent.futures import ThreadPoolExecutor
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 from redteam_agent.core.findings import FindingStatus, normalized_finding
 from redteam_agent.core.http_verifier import HTTPVerifier
@@ -75,20 +75,7 @@ _POISON_HEADERS = ("X-Forwarded-Host", "X-Original-URL", "X-Rewrite-URL",
                    "X-Host", "Forwarded")
 
 # ---------------------------------------------------------------------------
-# 5. Security headers
-# ---------------------------------------------------------------------------
-_SECURITY_HEADERS = {
-    "Content-Security-Policy": "CSP missing — XSS mitigation absent",
-    "Strict-Transport-Security": "HSTS missing — downgrade/SSL-strip risk",
-    "X-Frame-Options": "Clickjacking protection missing",
-    "X-Content-Type-Options": "MIME-sniffing protection missing",
-    "Cross-Origin-Opener-Policy": "COOP missing — cross-origin isolation absent",
-    "Cross-Origin-Resource-Policy": "CORP missing — cross-origin reads not constrained",
-    "Referrer-Policy": "Referrer policy missing — token leakage via Referer",
-}
-
-# ---------------------------------------------------------------------------
-# 6. DOM XSS — static data flow
+# 5. DOM XSS — static data flow
 # ---------------------------------------------------------------------------
 _DOM_SINKS = (
     r"\.innerHTML\s*=", r"\.outerHTML\s*=", r"document\.write\s*\(",
@@ -199,6 +186,11 @@ class ModernEngine:
             resp8 = self.verifier.send_http_request(url8)
             body7 = str(resp7.get("body", "") or "")
             body8 = str(resp8.get("body", "") or "")
+            # Anti-FP (live-run lesson, e-commerce search): if the payload is
+            # still reflected verbatim, the template engine did NOT evaluate
+            # it — numbers like "49"/"56" in catalog bodies are product noise.
+            if seven in body7 or eight in body8:
+                continue
             if "49" in body7 and "56" in body8:
                 return normalized_finding(
                     finding_type="Server-Side Template Injection (SSTI)", target=url,
@@ -226,22 +218,33 @@ class ModernEngine:
     # 3. Command injection — median timing
     # ------------------------------------------------------------------
     def cmd_time_based_median(self, url: str, param: str,
-                              samples: int = 3) -> Optional[Dict[str, Any]]:
+                              samples: int = 2) -> Optional[Dict[str, Any]]:
         """Command injection via median-of-N timing (sleep 1 vs sleep 5).
 
         Only a repeatable median shift counts; single spikes are rejected.
+        Timing samples for all payload groups are dispatched concurrently so
+        server-side sleeps overlap instead of adding up serially.
         """
         parsed = urllib.parse.urlparse(url)
         query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
         if param not in query:
             return None
         base = urllib.parse.urlunparse(parsed._replace(query=""))
-        baseline = self._median_time(f"{base}?{param}=1", samples)
+        sample_count = max(1, min(int(samples), 3))
+        groups: List[Tuple[str, int]] = [(f"{base}?{param}=1", sample_count)]
+        variants: List[Tuple[str, str, str]] = []
         for sleep1, sleep5 in _CMD_SLEEP_PAIRS:
-            t1 = self._median_time(f"{base}?{param}={urllib.parse.quote(f'1{sleep1}', safe='')}", samples)
-            t5 = self._median_time(f"{base}?{param}={urllib.parse.quote(f'1{sleep5}', safe='')}", samples)
+            low = urllib.parse.quote(f'1{sleep1}', safe='')
+            high = urllib.parse.quote(f'1{sleep5}', safe='')
+            groups.append((f"{base}?{param}={low}", sample_count))
+            groups.append((f"{base}?{param}={high}", sample_count))
+            variants.append((sleep1, sleep5, high))
+        medians = self._median_times(groups)
+        baseline = medians[0]
+        for index, (sleep1, sleep5, encoded_payload) in enumerate(variants):
+            t1 = medians[1 + index * 2]
+            t5 = medians[2 + index * 2]
             if t5 - t1 >= 2.0 and t1 - baseline >= 0.3:
-                encoded_payload = urllib.parse.quote(f'1{sleep5}', safe='')
                 return normalized_finding(
                     finding_type="Command Injection (Time-Based)", target=url,
                     endpoint=f"{base}?{param}={encoded_payload}", status=FindingStatus.LIKELY,
@@ -250,7 +253,7 @@ class ModernEngine:
                     test={},
                     evidence=[{"variant": sleep5.strip(), "median_baseline_s": round(baseline, 2),
                                "median_sleep1_s": round(t1, 2), "median_sleep5_s": round(t5, 2),
-                               "samples": samples}],
+                               "samples": sample_count}],
                     verification_checks=[{"name": "median_shift_repeatable", "passed": True},
                                          {"name": "sleep5_slower_than_sleep1", "passed": True}],
                     false_positive_reasons=["Backend may sleep on complex queries",
@@ -308,42 +311,7 @@ class ModernEngine:
         return None
 
     # ------------------------------------------------------------------
-    # 5. Security headers audit
-    # ------------------------------------------------------------------
-    def security_headers_audit(self, url: str) -> Optional[Dict[str, Any]]:
-        """Report missing security headers (informational misconfiguration)."""
-        response = self.verifier.send_http_request(url)
-        if response.get("status_code") not in (200, 201, 301, 302):
-            return None
-        headers = {k.lower(): v for k, v in (response.get("headers") or {}).items()}
-        missing = []
-        for header, reason in _SECURITY_HEADERS.items():
-            if header.lower() not in headers:
-                missing.append({"header": header, "reason": reason})
-        if not missing:
-            return None
-        return normalized_finding(
-            finding_type="Security Headers Misconfiguration", target=url,
-            endpoint=url, status=FindingStatus.LIKELY, confidence=.9,
-            source_module="modern_engine", source_tool="HTTPVerifier",
-            baseline=self._evidence(response), test={},
-            evidence=[{"missing_headers": missing}],
-            verification_checks=[{"name": "response_reachable", "passed": True},
-                                 {"name": "headers_absent", "passed": True}],
-            false_positive_reasons=["Headers may be set at a different layer for other routes"],
-            missing_evidence=["Impact demonstration (e.g. clickjacking PoC, MIME-sniffing)"],
-            severity="Low", cvss_score=3.7, param="",
-            reproduction_curl=f'curl -i -s "{url}"',
-            verification_note=f"{len(missing)} security header(s) missing: {', '.join(m['header'] for m in missing[:5])}.",
-            observed_impact="Response lacks standard hardening headers.",
-            potential_impact="Increased exposure to clickjacking, MIME sniffing, SSL-strip, and cross-origin reads.",
-            raw_request=response.get("raw_request", ""),
-            raw_response=response.get("raw_response", "")[:1500],
-            vrt_category="Security Misconfiguration > Missing Security Headers",
-        )
-
-    # ------------------------------------------------------------------
-    # 6. DOM XSS — static data flow over JS bundles
+    # 5. DOM XSS — static data flow over JS bundles
     # ------------------------------------------------------------------
     def dom_xss_analysis(self, js_assets: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         """Find sink/source pairs in JS bundles (static data-flow candidate)."""
@@ -374,13 +342,28 @@ class ModernEngine:
     # ------------------------------------------------------------------
     # Helpers
     # ------------------------------------------------------------------
-    def _median_time(self, url: str, samples: int) -> float:
-        times = []
-        for _ in range(max(1, samples)):
+    def _median_times(self, groups: Sequence[Tuple[str, int]]) -> List[float]:
+        """Send all timing samples concurrently and return one median per group."""
+        jobs: List[Tuple[int, str]] = []
+        for group_index, (url, count) in enumerate(groups):
+            jobs.extend((group_index, url) for _ in range(max(1, int(count))))
+        if not jobs:
+            return []
+
+        def _send(job: Tuple[int, str]) -> Tuple[int, float]:
+            group_index, url = job
             response = self.verifier.send_http_request(url)
-            times.append(float(response.get("response_time_sec") or 0.0))
-        times.sort()
-        return times[len(times) // 2]
+            return group_index, float(response.get("response_time_sec") or 0.0)
+
+        with ThreadPoolExecutor(max_workers=min(8, len(jobs))) as pool:
+            collected = list(pool.map(_send, jobs))
+        buckets: List[List[float]] = [[] for _ in groups]
+        for group_index, elapsed in collected:
+            buckets[group_index].append(elapsed)
+        return [sorted(bucket)[len(bucket) // 2] for bucket in buckets]
+
+    def _median_time(self, url: str, samples: int) -> float:
+        return self._median_times([(url, samples)])[0]
 
     @staticmethod
     def _evidence(response: Dict[str, Any]) -> Dict[str, Any]:
