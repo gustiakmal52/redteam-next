@@ -123,7 +123,7 @@ class ThreatIntelEngine:
         """Attempts to fetch the latest CISA KEV JSON catalog from cisa.gov."""
         url = "https://www.cisa.gov/sites/default/files/feeds/known_exploited_vulnerabilities.json"
         try:
-            response = self.verifier.send_http_request(url, headers={"User-Agent": "Gustiakmal-RedTeam-ThreatIntel/2.1"}, priority="normal")
+            response = self.verifier.send_http_request(url, priority="normal")
             if response.get("status_code") == 200:
                 data = json.loads(response.get("body", ""))
                 vulnerabilities = data.get("vulnerabilities", [])

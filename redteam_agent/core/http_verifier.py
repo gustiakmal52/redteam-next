@@ -26,6 +26,7 @@ try:
 except ImportError:  # pragma: no cover - depends on the deployment image
     _brotli = None
 
+from redteam_agent.core.config import DEFAULT_HEADER_PROFILE, HEADER_PROFILE_ENV, get_header_profile
 from redteam_agent.core.findings import FindingStatus
 from redteam_agent.core.scope_manager import ScopeManager
 from redteam_agent.core.sql_strategies import (candidate_dialects, error_marker,
@@ -329,7 +330,8 @@ class HTTPVerifier:
     def __init__(self, timeout: float = 10.0, traffic_controller: Optional[TrafficController] = None,
                  scope_manager: Optional[ScopeManager] = None, module: str = "verifier",
                  verify_tls: bool = True, pool: Optional[_KeepAlivePool] = None,
-                 ssl_context: Optional[ssl.SSLContext] = None):
+                 ssl_context: Optional[ssl.SSLContext] = None,
+                 header_profile: Optional[str] = None):
         self.timeout = timeout
         self.traffic = traffic_controller or TrafficController()
         self.scope = scope_manager
@@ -357,10 +359,22 @@ class HTTPVerifier:
                 if "\r" in str(header_value) or "\n" in str(header_value):
                     raise ValueError("request header environment values must not contain newlines")
                 self.required_headers[str(header_key)] = str(header_value)
+        # Transport identity profile.  The base headers every request starts
+        # from come from a header profile ("browser" by default) so the header
+        # shape matches what bot management expects to score.  Callers can
+        # still override any header per request, and program identification
+        # headers (required_headers) always win over the profile.
+        try:
+            profile_name = (header_profile or os.environ.get(HEADER_PROFILE_ENV, "")
+                            or DEFAULT_HEADER_PROFILE).strip().lower()
+        except AttributeError:
+            profile_name = DEFAULT_HEADER_PROFILE
+        self.header_profile_name = profile_name
+        self.header_profile = get_header_profile(profile_name)
         # TLS verification is part of evidence integrity.  The insecure mode
         # remains an explicit opt-in for a researcher-controlled lab with a
         # self-signed certificate; it is never the default.
-        self.ssl_context = ssl_context or (ssl.create_default_context() if self.verify_tls
+        self.ssl_context = ssl_context or (self._build_ssl_context() if self.verify_tls
                                            else ssl._create_unverified_context())
         self._pool = pool or _KeepAlivePool()
         self._opener = urllib.request.build_opener(
@@ -376,6 +390,54 @@ class HTTPVerifier:
         self._auth_netloc: Optional[str] = None
         self._auth_cookies: Dict[str, str] = {}
         self._auth_origin: Optional[str] = None
+
+    def _build_ssl_context(self) -> ssl.SSLContext:
+        """TLS client profile aligned with modern browser-like clients.
+
+        Default Python OpenSSL settings produce a JA3/JA4 fingerprint that bot
+        management on CDNs scores as "scripted client" before any payload is
+        inspected.  This keeps certificate verification fully intact (it does
+        NOT touch ``verify_tls``) while aligning the handshake with a modern
+        client: browser-like cipher order, X25519 key exchange, TLS 1.2 floor,
+        no TLS-level compression, and an explicit ``http/1.1`` ALPN offer so
+        the ClientHello looks like a normal library client rather than a bare
+        Python default.
+        """
+        context = ssl.create_default_context()
+        try:
+            context.minimum_version = ssl.TLSVersion.TLSv1_2
+            # Chromium/modern-client-like cipher suites, strongest first; the
+            # ordering itself is part of the client fingerprint.
+            context.set_ciphers(
+                "TLS_AES_128_GCM_SHA256:TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256:"
+                "ECDHE-ECDSA-AES128-GCM-SHA256:ECDHE-ECDSA-CHACHA20-POLY1305:"
+                "ECDHE-RSA-AES128-GCM-SHA256:ECDHE-RSA-CHACHA20-POLY1305:"
+                "ECDHE-ECDSA-AES256-GCM-SHA384:ECDHE-RSA-AES256-GCM-SHA384"
+            )
+            try:
+                # Newer OpenSSL accepts a group list; older builds only take a
+                # single curve name.  A refusal is non-fatal: the suites and
+                # floor already moved the fingerprint off the bare default.
+                context.set_ecdh_curve("X25519:P-256:P-384")
+            except (ssl.SSLError, ValueError, OSError):
+                try:
+                    context.set_ecdh_curve("X25519")
+                except (ssl.SSLError, ValueError, OSError):
+                    pass
+        except (ssl.SSLError, ValueError, OSError):
+            # Older OpenSSL builds may reject individual suites; fall back to
+            # the platform default rather than fail construction.
+            context = ssl.create_default_context()
+        try:
+            context.options |= ssl.OP_NO_COMPRESSION
+        except AttributeError:
+            pass
+        try:
+            context.set_alpn_protocols(["http/1.1"])
+            self._tls_alpn = ["http/1.1"]
+        except NotImplementedError:
+            self._tls_alpn = []
+        return context
 
     def connection_stats(self) -> Dict[str, int]:
         """Connection-reuse counters for evidence: fewer sockets, less load."""
@@ -461,7 +523,7 @@ class HTTPVerifier:
                           body: Optional[str] = None, *, priority: str = "verification",
                           follow_redirects: bool = True, max_redirects: int = 5) -> Dict[str, Any]:
         """Execute a real request; never synthesize status, body, or technology evidence."""
-        merged_headers = {"User-Agent": "Gustiakmal-RedTeam-Verifier/2.1"}
+        merged_headers = dict(self.header_profile)
         merged_headers.update(headers or {})
         merged_headers.update(self.required_headers)
         headers = merged_headers
@@ -725,8 +787,7 @@ class HTTPVerifier:
 
     @staticmethod
     def _json_post_headers() -> Dict[str, str]:
-        return {"Content-Type": "application/json", "Accept": "application/json",
-                "User-Agent": "Gustiakmal-RedTeam-Verifier/2.1"}
+        return {"Content-Type": "application/json", "Accept": "application/json"}
 
     def verify_sqli_time_based_json(self, target_url: str, field: str = "q",
                                     delay_sec: int = 5, samples: int = 3) -> Dict[str, Any]:

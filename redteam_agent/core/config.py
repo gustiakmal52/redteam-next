@@ -226,12 +226,44 @@ SQL_DUMP_MARKERS = [
     "Dump completed", "pg_dump", "\\copy ", "dbname=", "Server version",
 ]
 
-# Default HTTP Request Headers
-DEFAULT_HEADERS = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/128.0.0.0 Safari/537.36",
-    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,application/json;q=0.8,*/*;q=0.7",
-    "Accept-Language": "en-US,en;q=0.9"
+# Header profiles — the first line of defense fingerprinting.
+# Modern bot management (Cloudflare Bot Management, Akamai BMP, AWS WAF Bot
+# Control, DataDome, Kasada, HUMAN) scores the header *shape* and TLS client
+# fingerprint before a payload is ever inspected.  A self-declaring scanner
+# User-Agent combined with default-Python TLS is an instant challenge page no
+# matter how good the payload mutations are.  ``browser`` is therefore the
+# default transport identity; researcher transparency is preserved separately
+# via program contact headers (X-Bugcrowd-Ninja, REDTEAM_EXTRA_HEADERS), which
+# still ride every request and still win precedence over this profile.
+HEADER_PROFILES = {
+    "browser": {
+        "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8,application/signed-exchange;v=b3;q=0.7",
+        "Accept-Language": "en-US,en;q=0.9",
+        "sec-ch-ua": '"Chromium";v="131", "Not_A Brand";v="24"',
+        "sec-ch-ua-mobile": "?0",
+        "sec-ch-ua-platform": '"macOS"',
+    },
+    "scanner": {
+        "User-Agent": "Gustiakmal-RedTeam-Verifier/2.1",
+    },
 }
+DEFAULT_HEADER_PROFILE = "browser"
+HEADER_PROFILE_ENV = "REDTEAM_HEADER_PROFILE"
+
+
+def get_header_profile(name: str | None = None) -> dict[str, str]:
+    """Resolve a header profile: explicit name > env override > default."""
+    chosen = (name or os.environ.get(HEADER_PROFILE_ENV, "") or DEFAULT_HEADER_PROFILE).strip().lower()
+    if chosen not in HEADER_PROFILES:
+        raise ValueError(f"unknown header profile {chosen!r}; available: {', '.join(sorted(HEADER_PROFILES))}")
+    return dict(HEADER_PROFILES[chosen])
+
+
+# Default HTTP Request Headers — alias of the browser profile so legacy
+# consumers (js_analyzer) stay fingerprint-consistent with the transport
+# layer instead of overriding it with an older, hint-less header set.
+DEFAULT_HEADERS = dict(HEADER_PROFILES["browser"])
 
 # Scan Presets
 SCAN_PRESETS = {

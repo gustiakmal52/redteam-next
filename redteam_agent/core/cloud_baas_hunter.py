@@ -102,7 +102,7 @@ class CloudBaaSHunter:
 
     def audit_supabase(self, supabase_url: str, anon_key: str) -> Dict[str, Any]:
         clean_url = supabase_url.rstrip("/")
-        headers = {"apikey": anon_key, "Authorization": f"Bearer {anon_key}", "User-Agent": "Gustiakmal-RedTeam-BaaSHunter/2.1"}
+        headers = {"apikey": anon_key, "Authorization": f"Bearer {anon_key}"}
         claims = self.decode_jwt_payload(anon_key)
         service_role_claim = bool(claims and claims.get("role") == "service_role")
         result = {

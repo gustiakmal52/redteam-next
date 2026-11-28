@@ -112,6 +112,7 @@ Auth & identitas:
 
 Kontrol lalu lintas & budget:
   --traffic (STEALTH|NORMAL|FAST)
+  --header-profile (browser|scanner)  Identitas header transport (default: browser)
   --max-requests                Total request budget
   --bypass-budget               Budget bypass
   --max-depth (0-3)             Kedalaman exploit
@@ -137,6 +138,26 @@ Output:
 
 Traffic preset: `STEALTH` (2 rps global), `NORMAL` (5 rps), `FAST` (10 rps) —
 adaptive backoff aktif di semua preset, 429 menurunkan throttle host otomatis.
+
+## Header & TLS Profile (`core/config.py`, `core/http_verifier.py`)
+
+Bot management modern (Cloudflare Bot Management, Akamai BMP, AWS WAF Bot
+Control, DataDome, Kasada, HUMAN) menilai *bentuk header* dan fingerprint TLS
+sebelum payload diperiksa. Layer transport ini yang menentukan bisa tembus atau
+tidak:
+
+- **Header profile** — `browser` (default): UA Chrome + client hints
+  (`sec-ch-ua`, `sec-ch-ua-mobile`, `sec-ch-ua-platform`). `scanner`: UA
+  identitas lama, untuk differential eksplisit. Pilih via
+  `--header-profile browser|scanner` atau env `REDTEAM_HEADER_PROFILE`.
+  Prioritas header: program headers (`REDTEAM_EXTRA_HEADERS`,
+  `X-Bugcrowd-Ninja`) > header caller > profile.
+- **TLS profile** — cipher suite urutan modern-client, grup key exchange
+  X25519, floor TLS 1.2, tanpa TLS compression, ALPN `http/1.1`. Sertifikat
+  tetap diverifikasi penuh (bukan mode insecure).
+- **Fingerprint anti-bot modern** di `ReconDepth.detect_waf`: DataDome,
+  Kasada, HUMAN Security (PerimeterX), Cloudflare Challenge/Turnstile,
+  Akamai BMP, Fastly, Vercel — ditambah 9 WAF klasik yang sudah ada.
 
 ## Web Dashboard (`redteam_agent/web/`)
 

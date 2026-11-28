@@ -8,9 +8,10 @@ Usage:
 import sys
 import argparse
 import json
+import os
 from pathlib import Path
 import uvicorn
-from redteam_agent.core.config import DEFAULT_BYPASS_REQUEST_BUDGET, DEFAULT_REQUEST_BUDGET, MAX_BYPASS_DEPTH, SCAN_PRESETS
+from redteam_agent.core.config import DEFAULT_BYPASS_REQUEST_BUDGET, DEFAULT_REQUEST_BUDGET, HEADER_PROFILES, MAX_BYPASS_DEPTH, SCAN_PRESETS
 from redteam_agent.core.agent_engine import RedTeamAgentEngine
 from redteam_agent.core.engagement import EngagementProfile
 from redteam_agent.core.evidence_bundle import EvidenceBundleBuilder
@@ -27,6 +28,8 @@ def main():
                         help="Show discovered plaintext values in this CLI result only; reports/evidence bundles stay redacted")
     parser.add_argument("--listen", type=str, default="127.0.0.1", help="Dashboard bind address (default: 127.0.0.1)")
     parser.add_argument("--traffic", type=str.upper, default="NORMAL", choices=["STEALTH", "NORMAL", "FAST"], help="Traffic profile")
+    parser.add_argument("--header-profile", type=str.lower, default=None, choices=sorted(HEADER_PROFILES.keys()),
+                        help="Transport header identity: browser (default) or scanner; REDTEAM_HEADER_PROFILE env also works")
     parser.add_argument("--max-requests", type=int, default=DEFAULT_REQUEST_BUDGET, help=f"Total request budget (default: {DEFAULT_REQUEST_BUDGET})")
     parser.add_argument("--web-auth-token", type=str, default=None,
                         help="Dashboard token when bound beyond loopback (otherwise generated in memory)")
@@ -163,6 +166,10 @@ def main():
         }
 
     engine = RedTeamAgentEngine()
+    if args.header_profile:
+        # Same pattern as REDTEAM_EXTRA_HEADERS: every HTTPVerifier reads the
+        # profile from the environment at construction time.
+        os.environ["REDTEAM_HEADER_PROFILE"] = args.header_profile
     results = engine.audit_target(target, preset=args.preset, traffic_preset=args.traffic,
         max_requests=args.max_requests, scope_include=args.scope_include, scope_exclude=args.scope_exclude,
         exact_urls=args.exact_url, allow_private=args.allow_private,

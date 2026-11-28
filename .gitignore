@@ -37,3 +37,6 @@ redteam_agent/AGENT_MEMORY.md
 bin/probe_*.py
 TRANSFORMASI_SELESAI.txt
 LIVE_BOUNTY_MEMO.md
+
+# Engagement/authorization records stay local, never in a public repo
+.engagements/

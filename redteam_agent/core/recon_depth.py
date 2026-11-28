@@ -58,6 +58,35 @@ WAF_SIGNATURES = {
         "headers": ["ns_af"],
         "cookies": ["citrix_ns_id", "NSC_"],
     },
+    "DataDome": {
+        "cookies": ["datadome"],
+        "headers": ["x-dd-b", "x-datadome"],
+        "body": ["datadome.co", "Captcha challenge", "dd-captcha"],
+    },
+    "Kasada": {
+        "headers": ["x-kasada-ip", "x-kasada-waf"],
+        "body": ["kasada", "po_js_main", "x-kpsdk-ct"],
+    },
+    "HUMAN Security (PerimeterX)": {
+        "cookies": ["_px", "_pxhd", "_pxvid"],
+        "headers": ["x-px-captcha"],
+        "body": ["PerimeterX", "Human Security", "px-captcha", "press & hold"],
+    },
+    "Cloudflare Challenge / Turnstile": {
+        "headers": ["cf-mitigated", "cf-chl-bypass"],
+        "body": ["Just a moment...", "Verify you are human", "challenges.cloudflare.com/turnstile", "cf-chl"],
+    },
+    "Akamai BMP": {
+        "cookies": ["_abck", "bm_sz", "bm_sv"],
+        "body": ["Access Denied", "Reference #", "ak_bmsc"],
+    },
+    "Fastly": {
+        "headers": ["x-served-by:cache", "x-fastly-request-id", "fastly-restarting-request"],
+        "body": ["Fastly error: unknown domain", "Please check that this domain has been added to a service"],
+    },
+    "Vercel": {
+        "headers": ["x-vercel-id", "x-vercel-cache", "server:vercel"],
+    },
 }
 
 
