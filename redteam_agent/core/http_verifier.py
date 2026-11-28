@@ -521,8 +521,13 @@ class HTTPVerifier:
 
     def send_http_request(self, url: str, method: str = "GET", headers: Optional[Dict[str, str]] = None,
                           body: Optional[str] = None, *, priority: str = "verification",
-                          follow_redirects: bool = True, max_redirects: int = 5) -> Dict[str, Any]:
-        """Execute a real request; never synthesize status, body, or technology evidence."""
+                          follow_redirects: bool = True, max_redirects: int = 5,
+                          transfer_encoding: Optional[str] = None) -> Dict[str, Any]:
+        """Execute a real request; never synthesize status, body, or technology evidence.
+
+        ``transfer_encoding="chunked"`` sends the body as a chunked stream
+        (no Content-Length), the framing mutation used against inspection that
+        scopes itself to a declared body length."""
         merged_headers = dict(self.header_profile)
         merged_headers.update(headers or {})
         merged_headers.update(self.required_headers)
@@ -538,6 +543,19 @@ class HTTPVerifier:
                         headers[auth_key] = auth_value
         if not any(str(key).lower() == "accept-encoding" for key in headers):
             headers["Accept-Encoding"] = "gzip, br" if _brotli is not None else "gzip"
+        # Chunked transport: an iterator body keeps urllib from emitting a
+        # Content-Length, and the pooled handler passes encode_chunked=True
+        # when it sees the Transfer-Encoding header, so http.client performs
+        # the real chunk framing.
+        if (transfer_encoding or "").strip().lower() == "chunked" and body is not None:
+            if any(str(key).lower() == "transfer-encoding" for key in headers):
+                headers.pop("Transfer-Encoding", None)  # replaced by the canonical value below
+            payload = body.encode("utf-8")
+            chunk_size = 256
+            headers["Transfer-Encoding"] = "chunked"
+            data_stream = iter(payload[i:i + chunk_size] for i in range(0, len(payload), chunk_size))
+        else:
+            data_stream = None
         method = method.upper()
         active_scope = self.scope
         if active_scope is None:
@@ -559,6 +577,11 @@ class HTTPVerifier:
                 result["redirects"] = redirects
                 return result
             data_bytes = body.encode("utf-8") if body is not None else None
+            if data_stream is not None:
+                # Fresh iterator per attempt: a consumed generator would send
+                # an empty body on a retry.
+                data_stream = iter(payload[i:i + chunk_size] for i in range(0, len(payload), chunk_size))
+                data_bytes = data_stream
             request_url = current_url
             start = None
             try:

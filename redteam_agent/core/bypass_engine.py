@@ -579,6 +579,7 @@ MUTATION_CATEGORIES = (
     "unicode_representation", "html_entity_encoding", "json_escaping",
     "path_normalization", "duplicate_parameter", "parameter_pollution",
     "header_variation", "content_type_variation", "http_method_variation",
+    "nested_json_depth", "chunked_transfer", "xml_wrapper", "forwarded_ip_spoof",
 )
 
 
@@ -698,7 +699,12 @@ class PayloadMutationEngine:
             add("url_encoding", "double_url_encoding", "mixed_encoding", "case_mutation",
                 "whitespace_mutation", "separator_mutation", "delimiter_mutation")
         if is_json:
-            add("json_escaping", "duplicate_parameter", "parameter_pollution", "content_type_variation")
+            add("json_escaping", "duplicate_parameter", "parameter_pollution", "content_type_variation",
+                "nested_json_depth")
+        accepted_types = json.dumps(
+            (context.get("accepted_content_types") or context.get("supported_content_types") or [])).lower()
+        if "xml" in accepted_types or "soap" in accepted_types:
+            add("xml_wrapper")
         if context.get("accepted_content_types") or context.get("supported_content_types"):
             add("content_type_variation")
         if is_auth:
@@ -710,8 +716,16 @@ class PayloadMutationEngine:
             add("mixed_encoding", "case_mutation", "separator_mutation", "json_escaping")
         if "fastly" in waf_text or "akamai" in waf_text:
             add("path_normalization", "url_encoding", "header_variation")
+        # Any observed protection makes transport-level framing mutations
+        # relevant: chunked bodies hide payloads from content-length-scoped
+        # inspection, and IP-trust headers replay internal trust.
+        if waf:
+            add("chunked_transfer")
+        if "ip" in context_text or "client" in context_text or "acl" in context_text \
+                or "access-control" in context_text or "internal" in context_text:
+            add("forwarded_ip_spoof")
         if "blocked" in behavior_text or "challenge" in behavior_text or "403" in behavior_text:
-            add("mixed_encoding", "whitespace_mutation", "delimiter_mutation")
+            add("mixed_encoding", "whitespace_mutation", "delimiter_mutation", "chunked_transfer")
         if "duplicate" in context_text or "pollution" in context_text:
             add("duplicate_parameter", "parameter_pollution")
         if any(token in context_text for token in ("header", "routing", "access-control")):
@@ -849,6 +863,41 @@ class PayloadMutationEngine:
                         break
                     add(category, f"safe_method_{selected.lower()}", raw,
                         method=selected, risk=0.15)
+            elif category == "nested_json_depth":
+                # Deeply nested leaf values push the payload past regex
+                # inspection windows that only scan shallow JSON levels.
+                field = str(context.get("json_field") or parameter or "q")
+                nested: dict[str, Any] = raw
+                for _ in range(8):
+                    nested = {field: nested}
+                add(category, "nested_json_depth8", json.dumps(nested, separators=(",", ":")),
+                    metadata={"depth": 8, "json_field": field}, risk=0.25)
+            elif category == "chunked_transfer":
+                # Transport-level framing: the payload travels unchanged but
+                # arrives inside a chunked body, invisible to content-length
+                # scoped inspection. The verifier's transport performs the
+                # actual chunk encoding.
+                add(category, "transfer_encoding_chunked", raw,
+                    metadata={"transfer_encoding": "chunked"}, risk=0.3)
+            elif category == "xml_wrapper":
+                field = str(context.get("json_field") or parameter or "q")
+                xml_body = (f'<?xml version="1.0"?>\n<root><{field}>'
+                            f'{raw.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")}'
+                            f'</{field}></root>')
+                add(category, "xml_wrapped_payload", xml_body,
+                    content_type="application/xml",
+                    headers={"Content-Type": "application/xml"},
+                    metadata={"body_transform": "xml_wrap", "xml_field": field}, risk=0.2)
+            elif category == "forwarded_ip_spoof":
+                # Trust-boundary hypothesis: edge/ACL layers that trust client
+                # IP headers replay internal trust to reach otherwise blocked
+                # routes. Never a generic fallback (select_categories gates it).
+                add(category, "internal_client_ip_headers", raw, headers={
+                    "X-Forwarded-For": "127.0.0.1",
+                    "X-Real-IP": "127.0.0.1",
+                    "True-Client-IP": "127.0.0.1",
+                    "X-Original-Client-IP": "127.0.0.1",
+                }, risk=0.4)
         return generated[:max_mutations]
 
     generate = generate_mutations
@@ -900,6 +949,31 @@ class ResponseLearner:
     def __init__(self) -> None:
         self.strategies: dict[str, StrategyScore] = {}
         self.history: list[dict[str, Any]] = []
+
+    def load_state(self, state: Mapping[str, Any]) -> None:
+        """Restore previously learned strategy scores (cross-run memory)."""
+        for strategy, record in (state.get("strategies") or {}).items():
+            if not isinstance(record, Mapping):
+                continue
+            try:
+                score = StrategyScore(
+                    strategy=str(strategy),
+                    success_count=int(record.get("success_count") or 0),
+                    attempt_count=int(record.get("attempt_count") or 0),
+                    request_count=int(record.get("request_count") or 0),
+                    confidence=float(record.get("confidence") or 0.0),
+                    cost=float(record.get("cost") or 1.0),
+                    risk=float(record.get("risk") or 0.1))
+            except (TypeError, ValueError):
+                continue
+            if strategy in self.strategies:
+                existing = self.strategies[strategy]
+                existing.success_count += score.success_count
+                existing.attempt_count += score.attempt_count
+                existing.request_count += score.request_count
+                existing.confidence = max(existing.confidence, score.confidence)
+            else:
+                self.strategies[strategy] = score
 
     def _score(self, strategy: str, candidate: Optional[MutationCandidate] = None) -> StrategyScore:
         if strategy not in self.strategies:
@@ -1733,7 +1807,16 @@ class BypassEngine:
         selected_headers = dict(headers)
         selected_headers.update(candidate.headers)
         selected_body = body
+        request_extras: dict[str, Any] = {}
+        if isinstance(candidate.metadata, Mapping) and candidate.metadata.get("transfer_encoding"):
+            request_extras["transfer_encoding"] = str(candidate.metadata["transfer_encoding"])
         location = context.get("input_location", "query")
+
+        if candidate.category == "nested_json_depth" and location in {"json", "json_body", "body"}:
+            # The candidate value is already the full nested document.
+            selected_body = candidate.value
+        elif candidate.category == "xml_wrapper":
+            selected_body = candidate.value
 
         if candidate.category in {"duplicate_parameter", "parameter_pollution"}:
             param = candidate.parameter or parameter
@@ -1778,6 +1861,7 @@ class BypassEngine:
         return {
             "url": url, "method": selected_method,
             "headers": selected_headers, "body": selected_body,
+            **request_extras,
         }
 
     def _send(self, request: Mapping[str, Any]) -> dict[str, Any]:
@@ -1788,11 +1872,13 @@ class BypassEngine:
                 "error": f"{selected_method} not sent: state-changing method is not allowed in bypass verification",
                 "failure": {"type": "destructive_method_skipped", "verified": False},
             }
+        transfer_encoding = request.get("transfer_encoding")
         try:
             return self.verifier.send_http_request(
                 request["url"], method=request.get("method", "GET"),
                 headers=request.get("headers"), body=request.get("body"),
-                priority="verification")
+                priority="verification",
+                transfer_encoding=transfer_encoding)
         except TypeError:
             return self.verifier.send_http_request(
                 request["url"], method=request.get("method", "GET"),

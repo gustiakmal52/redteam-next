@@ -182,6 +182,41 @@ merouting plan ke primitif yang tepat. Endpoint label `cache_deception`,
 `host_header_poisoning`, `crlf_header_injection`, `xxe_file_read` terdaftar
 di `CVSS_VECTORS`.
 
+## Pass 3 — Bypass Modern & Forgery (Defense Solid)
+
+**Mutasi transport-level baru** di `PayloadMutationEngine` (total 20 kategori):
+- `nested_json_depth` — payload di nested 8 level, lewat window inspeksi regex
+  WAF dangkal (JSON/API context).
+- `chunked_transfer` — body dikirim chunked beneran (tanpa Content-Length)
+  via `send_http_request(transfer_encoding="chunked")`; invisible buat
+  inspeksi yang scope-nya panjang body deklarasi. Aktif saat WAF terdeteksi
+  atau behavior "blocked/challenge".
+- `xml_wrapper` — payload dibungkus XML (`application/xml`) saat content-type
+  XML terbukti diterima.
+- `forwarded_ip_spoof` — replay trust internal (`X-Forwarded-For: 127.0.0.1`
+  dll) hanya saat konteks ACL/IP/access-control eksplisit; tidak pernah
+  fallback generik.
+
+**JWT forgery suite** (`exploit_engine`):
+- `test_jwt_kid_traversal` — `kid=…/dev/null` + HMAC secret kosong.
+- `test_jwt_jku_injection` — `jku` menuju key source attacker.
+- `test_jwt_hs256_rs256_confusion` — HMAC pakai RSA public key.
+Semua: forging lokal; **VERIFIED hanya bila endpoint in-scope menerima token
+palsu** (differential no-token vs forged); tanpa endpoint → LIKELY jujur.
+
+**Server-side prototype pollution** — `test_prototype_pollution_server_side`:
+canary probe (`__proto__`/`constructor.prototype`, 5 vektor) vs canary kontrol
+(key top-level jinak) **satu observasi follow-up yang sama**; keduanya muncul =
+mass assignment, bukan pollution → tidak VERIFIED.
+
+**Request smuggling desync detection** — `test_request_smuggling_desync`:
+metodologi PortSwigger aman — probing framing kontradiktif (CL.TE / TE.CL)
+di dedicated socket, leftover framing hanya mengkorupsi probe kedua milik
+riset sendiri; **simtom hanya dihitung bila probe DITERIMA (2xx/3xx) lalu
+request berikutnya rusak/delay**, diulang di 2 socket berbeda, dengan kontrol
+pair bersih. Server yang menolak dual-framing (400 + close) = hardened, bukan
+temuan. Tidak ada request asing yang di-smuggle saat deteksi.
+
 ## Web Dashboard (`redteam_agent/web/`)
 
 - Dashboard lokal tanpa token; bind LAN memakai token (`--web-auth-token`)
