@@ -159,6 +159,29 @@ tidak:
   Kasada, HUMAN Security (PerimeterX), Cloudflare Challenge/Turnstile,
   Akamai BMP, Fastly, Vercel — ditambah 9 WAF klasik yang sudah ada.
 
+## Primitif Modern — `ExploitEngine` (verifikasi deterministik)
+
+Empat primitif baru yang belum dicover engine lain, semua dengan standar bukti
+rumah ini (differential + counterevidence; tanpa klaim status-only):
+
+| Primitif | Bukti VERIFIED | Turun jujur ke |
+|---|---|---|
+| **Web Cache Deception** | Body personal ada di path dihias `.css/.js` + cache HIT **dan** replay anonim tanpa session mengembalikan body sama | LIKELY bila replay sama tapi marker HIT tak teramati |
+| **Host Header Poisoning** | Link/redirect yang di-generate server mengandung host attacker (`Host` / `X-Forwarded-Host` canary), absent di baseline | Reject: echo teks biasa bukan link |
+| **CRLF Injection** | Header `X-Injected-Canary` nyata muncul di response headers | Body-echo tanpa header = bukan temuan |
+| **XXE File Read** | Differential vs dokumen kontrol entity-undefined (dokumen defined-entity resolve, kontrol gagal) atau echo isi file | LIKELY bila parser error generik |
+
+Sweep primitif berjalan di `agent_engine` hanya pada **offensive mode** +
+`exploit_verifier` di preset, terhadap endpoint hasil discovery yang in-scope
+(maks 20 endpoint; XXE hanya di path ber-hint XML). Empat kelasnya juga
+**teknik planner first-class** di `DeepExploitEngine`: `build_attack_plan`
+membuat hipotesis (cache: GET semantics; CRLF: hanya endpoint ber-query;
+XXE: path ber-hint XML), `execute_attack_plan` men-dispatch dengan akuntansi
+budget delta trafik, dan `--vuln-class cache-deception|host-header|crlf|xxe`
+merouting plan ke primitif yang tepat. Endpoint label `cache_deception`,
+`host_header_poisoning`, `crlf_header_injection`, `xxe_file_read` terdaftar
+di `CVSS_VECTORS`.
+
 ## Web Dashboard (`redteam_agent/web/`)
 
 - Dashboard lokal tanpa token; bind LAN memakai token (`--web-auth-token`)

@@ -789,6 +789,47 @@ class RedTeamAgentEngine:
             if jwt_findings:
                 await task.emit_log("ALERT", f"[FINDING] offline JWT analysis: {len(jwt_findings)} token issue(s)")
 
+            # Modern primitive sweep (cache deception, host header poisoning,
+            # CRLF, XXE) — deterministic verifiers over discovered in-scope
+            # endpoints only, in authorized offensive mode. No guessed hosts,
+            # no generic spray: the same anti-halu contract as the planner.
+            if "exploit_verifier" in modules and task.offensive:
+                sweep_endpoints = active_endpoints[:20]
+                sweep_findings = []
+                xml_hints = ("xml", "rss", "soap", "feed", "export")
+                for endpoint in sweep_endpoints:
+                    for primitive in (exploit_engine.test_host_header_poisoning,
+                                      exploit_engine.test_crlf_injection,
+                                      exploit_engine.test_cache_deception):
+                        try:
+                            finding = primitive(endpoint)
+                        except Exception as exc:  # a primitive must never break the pipeline
+                            await task.emit_log("WARN", f"[VERIFY] primitive {primitive.__name__} failed on {endpoint}: {str(exc)[:120]}", "Deep Exploit Verification", 82)
+                            continue
+                        if finding:
+                            finding.setdefault("target", target_url)
+                            sweep_findings.append(finding)
+                    path_lower = urllib.parse.urlparse(endpoint).path.lower()
+                    if any(hint in path_lower for hint in xml_hints):
+                        try:
+                            finding = exploit_engine.test_xxe_file_read(endpoint)
+                        except Exception as exc:
+                            await task.emit_log("WARN", f"[VERIFY] primitive test_xxe_file_read failed on {endpoint}: {str(exc)[:120]}", "Deep Exploit Verification", 82)
+                            finding = None
+                        if finding:
+                            finding.setdefault("target", target_url)
+                            sweep_findings.append(finding)
+                if sweep_endpoints:
+                    await task.emit_log("INFO",
+                        f"[VERIFY] modern primitive sweep: cache deception / host header / CRLF / XXE over {len(sweep_endpoints)} discovered endpoint(s)",
+                        "Deep Exploit Verification", 82)
+                if sweep_findings:
+                    all_findings.extend(sweep_findings)
+                    verified_sweep = [f for f in sweep_findings if f.get("status") == "VERIFIED"]
+                    await task.emit_log("ALERT",
+                        f"[FINDING] primitive sweep: {len(sweep_findings)} finding(s), {len(verified_sweep)} verified",
+                        "Deep Exploit Verification", 83)
+
             task.results["findings"] = all_findings
             verified = [finding for finding in all_findings if finding.get("status") == "VERIFIED"]
             for finding in verified:

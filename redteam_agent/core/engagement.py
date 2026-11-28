@@ -32,6 +32,8 @@ IMPLEMENTED_CLASSES = frozenset({
     "open-redirect", "graphql", "cloud-baas",
     "authorization", "auth-bypass",
     "cache-poisoning",
+    "cache-deception", "host-header", "host-header-poisoning",
+    "crlf", "crlf-injection", "xxe",
 })
 
 
